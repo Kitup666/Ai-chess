@@ -1,0 +1,235 @@
+/* ============================================
+   AI Chess · 设计系统「棋谱编辑部」
+   Editorial Minimalism — 暖纸 · 墨色 · 沉绿
+   ============================================ */
+
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap");
+
+:root {
+  /* 色彩 */
+  --bg: #f6f2ea;
+  --surface: #fcfaf5;
+  --surface-2: #efeae0;
+  --ink: #1b1a17;
+  --ink-muted: #8c857a;
+  --ink-faint: #b8b0a2;
+  --line: #e3ddd0;
+  --accent: #2e4a3e;
+  --accent-soft: #e8ede7;
+  --board-light: #ede4d3;
+  --board-dark: #5a7159;
+  --board-frame: rgba(27, 26, 23, 0.04);
+  --highlight: #c9a961;
+  --danger: #a8453a;
+
+  /* 字体 */
+  --font-display: "Fraunces", Georgia, serif;
+  --font-sans: "Geist", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+
+  /* 间距 */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+  --sp-8: 64px;
+
+  /* 圆角 */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+
+  /* 缓动 */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  height: 100vh;
+}
+
+/* ===== 动画 ===== */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.rise {
+  animation: rise 0.7s var(--ease) both;
+}
+
+/* ===== 滚动条 ===== */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-faint);
+}
+
+/* ===== 通用组件 ===== */
+
+/* 底线输入框 */
+.input-line {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  padding: var(--sp-2) 0;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--ink);
+  outline: none;
+  transition: border-color 0.2s var(--ease);
+}
+.input-line:focus {
+  border-bottom-color: var(--accent);
+}
+.input-line::placeholder {
+  color: var(--ink-faint);
+}
+
+/* 方形分段按钮 */
+.seg-group {
+  display: flex;
+  gap: var(--sp-1);
+}
+.seg-btn {
+  flex: 1;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink);
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+  border-radius: var(--r-sm);
+}
+.seg-btn:hover {
+  background: var(--surface-2);
+}
+.seg-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+/* 主按钮 */
+.btn-primary {
+  width: 100%;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.2s var(--ease);
+  border-radius: var(--r-sm);
+  letter-spacing: 0.02em;
+}
+.btn-primary:hover {
+  opacity: 0.85;
+}
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 次按钮 */
+.btn-ghost {
+  padding: var(--sp-2) var(--sp-4);
+  background: transparent;
+  color: var(--ink);
+  border: none;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s var(--ease);
+  border-radius: var(--r-sm);
+}
+.btn-ghost:hover {
+  background: var(--surface-2);
+}
+.btn-ghost:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* 标签 */
+.label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+  margin-bottom: var(--sp-2);
+  font-weight: 500;
+}
+
+/* 区块 */
+.section {
+  padding-bottom: var(--sp-5);
+  border-bottom: 1px solid var(--line);
+}
+.section:last-child {
+  border-bottom: none;
+}
