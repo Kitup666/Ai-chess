@@ -8,12 +8,16 @@ echo  AI Chess - Dev Launcher
 echo ========================================
 echo.
 
-echo [1/3] Installing npm dependencies...
-call npm install
-if %errorlevel% neq 0 (
-    echo npm install failed. Make sure Node.js is installed.
-    pause
-    exit /b 1
+if not exist "node_modules" (
+    echo [1/3] Installing npm dependencies...
+    call npm install
+    if %errorlevel% neq 0 (
+        echo npm install failed. Make sure Node.js is installed.
+        pause
+        exit /b 1
+    )
+) else (
+    echo [1/3] npm dependencies already installed.
 )
 
 echo [2/3] Checking port 1420...
