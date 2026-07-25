@@ -18,6 +18,8 @@ export interface Settings {
   minThinkingTokens: number;
   /// Self-Consistency 多采样次数（1=关闭，>1=多次采样取多数走法）
   selfConsistencySamples: number;
+  /// 思考链显示位置："board"=棋盘旁（默认，单行轮换），"left"=左边栏（多行滚动）
+  thinkingPosition: "board" | "left";
   side: Side;
   started: boolean;
   /// 白方主体类型
@@ -38,6 +40,7 @@ export interface Settings {
 const SF_ELO_KEY = "chess_sf_elo";
 const SF_SKILL_KEY = "chess_sf_skill";
 const SF_USE_ELO_KEY = "chess_sf_use_elo";
+const THINKING_POS_KEY = "chess_thinking_pos";
 
 function loadSfElo(): number {
   if (typeof localStorage === "undefined") return 1500;
@@ -53,6 +56,12 @@ function loadSfUseElo(): boolean {
   if (typeof localStorage === "undefined") return true;
   return localStorage.getItem(SF_USE_ELO_KEY) !== "false";
 }
+function loadThinkingPos(): "board" | "left" {
+  if (typeof localStorage === "undefined") return "board";
+  const v = localStorage.getItem(THINKING_POS_KEY);
+  if (v === "left") return "left";
+  return "board";
+}
 
 const initialSettings: Settings = {
   apiKey: "",
@@ -63,6 +72,7 @@ const initialSettings: Settings = {
   reasoningEffort: "high",
   minThinkingTokens: 0,
   selfConsistencySamples: 1,
+  thinkingPosition: loadThinkingPos(),
   side: "white",
   started: false,
   whitePlayer: "human",
@@ -80,6 +90,7 @@ settings.subscribe((s) => {
   localStorage.setItem(SF_ELO_KEY, String(s.stockfishElo));
   localStorage.setItem(SF_SKILL_KEY, String(s.stockfishSkill));
   localStorage.setItem(SF_USE_ELO_KEY, String(s.useStockfishElo));
+  localStorage.setItem(THINKING_POS_KEY, s.thinkingPosition);
 });
 
 export function updateSettings(partial: Partial<Settings>) {

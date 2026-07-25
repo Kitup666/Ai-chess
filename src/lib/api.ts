@@ -63,6 +63,13 @@ export async function loadState(): Promise<LoadedState | null> {
   return invoke<LoadedState | null>("load_state");
 }
 
+/// 取消当前 DeepSeek 请求（用户暂停/重置时调用）
+/// 设置 cancel_flag 后，正在进行的 chat_stream 会在下一个 chunk 检测到并退出，
+/// 从而关闭 HTTP 连接，让 DeepSeek 服务端也停止生成，节省 token。
+export async function cancelDeepSeek(): Promise<void> {
+  return invoke("cancel_deepseek");
+}
+
 /// 监听 AI 思考增量（流式）
 export async function onAiThinking(cb: (chunk: string) => void): Promise<UnlistenFn> {
   return listen<string>("ai-thinking", (e) => cb(e.payload));

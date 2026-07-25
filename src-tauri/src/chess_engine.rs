@@ -108,6 +108,49 @@ impl ChessGame {
         hanging
     }
 
+    /// 检测己方被攻击且无保护的棋子（己方悬空子）
+    ///
+    /// 与 enemy_hanging() 相反：enemy_hanging 报告对方可白吃的棋子（己方攻击机会），
+    /// own_hanging 报告己方被悬空的棋子（对方可白吃），帮助 AI 识别必须优先防守的棋子。
+    ///
+    /// 算法：用 null_move() 翻转行棋方获取对手走法，对每个吃子走法模拟后检查能否回吃。
+    /// 无法回吃 → 该己方棋子悬空，对方可白吃。
+    ///
+    /// 返回格式：["Qh4", "Bc5"]（大写=白方棋子，小写=黑方棋子）
+    pub fn own_hanging(&self) -> Vec<String> {
+        let mut hanging = Vec::new();
+        let my_color = self.board.side_to_move();
+
+        // null_move 翻转 side_to_move，使 MoveGen 生成对手的走法
+        if let Some(opponent_board) = self.board.null_move() {
+            let enemy_moves = MoveGen::new_legal(&opponent_board);
+            for mv in enemy_moves {
+                let target = mv.get_dest();
+                // 只看吃子走法（目标格有己方棋子）
+                if let Some(my_piece) = opponent_board.piece_on(target) {
+                    // 模拟对手吃子
+                    let after = opponent_board.make_move_new(mv);
+                    // 检查己方能否回吃
+                    let can_recapture = MoveGen::new_legal(&after).any(|r| r.get_dest() == target);
+                    if !can_recapture {
+                        // 己方该子悬空，将被白吃
+                        let pc = piece_to_char(my_piece);
+                        let piece_str = if my_color == Color::White {
+                            pc.to_ascii_uppercase()
+                        } else {
+                            pc
+                        };
+                        hanging.push(format!("{}{}", piece_str, square_to_str(target)));
+                    }
+                }
+            }
+        }
+
+        hanging.sort();
+        hanging.dedup();
+        hanging
+    }
+
     /// 验证走法是否合法
     pub fn is_legal(&self, mv: &ChessMove) -> bool {
         self.legal_moves().contains(mv)
@@ -267,5 +310,62 @@ pub fn color_opposite(c: Color) -> Color {
     match c {
         Color::White => Color::Black,
         Color::Black => Color::White,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_own_hanging_undefended_pawn() {
+        use std::str::FromStr;
+        // 1.e4 e5 2.Nf3 — 黑方 e5 兵被白方 Nf3 攻击，无保护 → 应在 Black 的 own_hanging 中
+        // FEN: rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 0 2
+        let fen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 0 2";
+        let board = Board::from_str(fen).expect("合法的 FEN");
+        let mut game = ChessGame::new(Color::Black, "human".to_string(), "deepseek".to_string());
+        game.board = board;
+        let danger = game.own_hanging();
+        assert!(!danger.is_empty(), "黑方e5兵被Nf3攻击无保护应在 own_hanging 中");
+        assert!(danger.iter().any(|s| s.contains("e5")), "e5应在 own_hanging: {:?}", danger);
+    }
+
+    #[test]
+    fn test_own_hanging_defended_piece_not_listed() {
+        use std::str::FromStr;
+        // 1.e4 c5 2.Nf3 Nc6 3.d4 cxd4 4.Nxd4 — Black's Nc6 attacked by Nd4 but defended by b7 pawn
+        let fen = "r1bqkbnr/pp1ppppp/2n5/8/3NP3/8/PPP2PPP/RNBQKB1R b KQkq - 0 4";
+        let board = Board::from_str(fen).expect("合法的 FEN");
+        let mut game = ChessGame::new(Color::Black, "human".to_string(), "deepseek".to_string());
+        game.board = board;
+        // Black's Nc6 is attacked by Nd4, defended by b7 pawn → NOT hanging
+        let danger = game.own_hanging();
+        assert!(!danger.iter().any(|s| s.contains("c6")), "Nc6有b7保护不应在 own_hanging: {:?}", danger);
+    }
+
+    #[test]
+    fn test_own_hanging_defended_pawn() {
+        use std::str::FromStr;
+        // 1.e4 d5 2.exd5 Qxd5 3.Nc3 — 黑方后d5被白方马c3攻击，黑方无保护
+        // 从白方视角：enemy_hanging 应包含后d5（白方可白吃）
+        // 从白方视角：own_hanging 应为空（白方无子被黑方无保护地攻击）
+        let fen = "rnb1kbnr/ppp2ppp/8/3q4/8/2N5/PPPPPPPP/R1BQKBNR w KQkq - 0 3";
+        let board = Board::from_str(fen).expect("合法的 FEN");
+        let mut game = ChessGame::new(Color::White, "human".to_string(), "deepseek".to_string());
+        game.board = board;
+        // 白方有 attack 可白吃黑后
+        let enemy_hanging = game.enemy_hanging();
+        assert!(enemy_hanging.iter().any(|s| s.contains("d5")), "后d5应在 enemy_hanging: {:?}", enemy_hanging);
+        // 白方 own_hanging 应为空（马c3有b2兵保护）
+        let own_danger = game.own_hanging();
+        assert!(own_danger.is_empty(), "白方无悬空子: {:?}", own_danger);
+    }
+
+    #[test]
+    fn test_own_hanging_empty_on_start() {
+        let game = ChessGame::new(Color::White, "human".to_string(), "deepseek".to_string());
+        assert!(game.own_hanging().is_empty(), "开局不应有己方悬空子");
+        assert!(game.enemy_hanging().is_empty(), "开局不应有对方悬空子");
     }
 }

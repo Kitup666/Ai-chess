@@ -12,6 +12,7 @@ import { settings } from "./settings";
 import { updateGameState, aiThinking, aiFailed, aiPick } from "./game";
 import { playMoveSounds } from "../sounds/player";
 import { gameState } from "./game";
+import { cancelDeepSeek } from "../api";
 
 let managerInstance: PlayerManager | null = null;
 
@@ -146,6 +147,7 @@ export async function continueAfterHumanMove(state: GameStateDto): Promise<void>
 /// 停止自对弈循环
 export function stopAutoPlay(): void {
   managerInstance?.stop();
+  cancelDeepSeek();
 }
 
 /// 重置停止状态（不重建实例）

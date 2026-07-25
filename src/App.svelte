@@ -27,6 +27,7 @@
   import Board from "./lib/components/Board.svelte";
   import Settings from "./lib/components/Settings.svelte";
   import EvalBar from "./lib/components/EvalBar.svelte";
+  import ThinkingPanel from "./lib/components/ThinkingPanel.svelte";
   import AnalysisPanel from "./lib/components/AnalysisPanel.svelte";
   import MoveHistory from "./lib/components/MoveHistory.svelte";
   import {
@@ -47,6 +48,8 @@
   let narrowScreen = $state(typeof window !== "undefined" && window.innerWidth < 900);
   // 是否显示评估柱（引擎加载过即显示）
   let showEvalBar = $derived($engineStatus !== "unloaded");
+  // 思考链位置：左边栏还是棋盘旁
+  let thinkingPanelPos = $derived($settings.thinkingPosition);
 
   // 右侧合并面板：标签页切换 + 收起状态
   type TabId = "history" | "analysis" | "settings";
@@ -541,10 +544,13 @@
 
   <!-- 中央棋盘区（桌面双栏：棋盘 + 右侧合并面板 / 窄屏单列） -->
   <section class="stage" class:narrow={narrowScreen}>
-    <!-- 第一列：棋盘 + 评估柱（启动直入棋盘，无 Welcome 页） -->
+    <!-- 第一列：棋盘 + 评估柱 + 思考链面板（启动直入棋盘，无 Welcome 页） -->
     <div class="board-area" class:with-eval={showEvalBar}>
       {#if showEvalBar}
         <EvalBar />
+      {/if}
+      {#if thinkingPanelPos === "left"}
+        <ThinkingPanel />
       {/if}
       <Board />
     </div>

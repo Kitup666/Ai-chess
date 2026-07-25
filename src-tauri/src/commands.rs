@@ -5,6 +5,7 @@ use crate::move_parser::{extract_move_and_score, parse_and_validate, ParseError}
 use crate::persistence::{SaveData, SettingsSave};
 use crate::prompt::build_messages;
 use chess::BoardStatus;
+use std::sync::atomic::AtomicBool;
 use tauri::{Emitter, State};
 
 /// 更新 DeepSeek 设置（API Key / 模型 / 思考模式 / 伪思考 / 思考语言 / 思考强度 / 最少思考token / 自洽采样次数），即时生效，不重开游戏
@@ -62,6 +63,14 @@ pub async fn update_settings(
     Ok(())
 }
 
+/// 取消当前 DeepSeek 请求
+/// 设置 cancel_flag 后，正在进行的 chat_stream 会在下一个 chunk 检测到并退出，
+/// 从而关闭 HTTP 连接，让 DeepSeek 服务端也停止生成，节省 token。
+#[tauri::command]
+pub fn cancel_deepseek(state: State<'_, AppState>) {
+    state.cancel_current_request();
+}
+
 /// 开始新游戏
 #[tauri::command]
 pub async fn start_game(
@@ -90,6 +99,8 @@ pub async fn start_game(
         side
     };
     let game = ChessGame::new(player_side, white_player, black_player);
+    // 取消正在进行的 DeepSeek 请求
+    state.cancel_current_request();
     // 递增对局代次，使进行中的旧 ai_move 请求放弃走法
     state.bump_generation();
     // 语言空值兜底为 "zh"
@@ -194,6 +205,9 @@ pub async fn ai_move(
 ) -> Result<MoveResult, String> {
     // 快照对局代次：每次 make_move 前校验，若代次已变（用户重置/开始新对局）则放弃走法
     let generation = state.current_generation();
+    // 重置取消标志，允许新的 chat_stream 正常执行
+    state.reset_cancel_flag();
+    let cancel_flag = state.cancel_flag();
 
     // 1. 获取配置（合法走法列表用于举棋兜底；messages 在循环内重建以支持 VAM 迭代裁剪）
     let (max_retries, legal_moves, ai_side, lang, notes, pseudo, min_tokens, sc_samples) = {
@@ -226,7 +240,7 @@ pub async fn ai_move(
             build_messages(game, &ai_side, &lang, &notes, &[], pseudo, min_tokens)
         };
         let (content1, reasoning1, usage1) = client
-            .chat_stream(messages, &app, legal_moves.clone(), pseudo, false, None)
+            .chat_stream(messages, &app, legal_moves.clone(), pseudo, false, None, &cancel_flag)
             .await?;
 
         // 3b. 后续 N-1 次并行静默采样（temperature=0.7 增加多样性）
@@ -245,9 +259,10 @@ pub async fn ai_move(
             let client_c = client.clone();
             let app_c = app.clone();
             let legal_c = legal_moves.clone();
+            let cancel_c = cancel_flag.clone();
             handles.push(tokio::spawn(async move {
                 client_c
-                    .chat_stream(messages, &app_c, legal_c, pseudo, true, Some(0.7))
+                    .chat_stream(messages, &app_c, legal_c, pseudo, true, Some(0.7), &cancel_c)
                     .await
             }));
         }
@@ -353,7 +368,7 @@ pub async fn ai_move(
         let _ = app.emit("ai-pick-reset", ());
         return ai_move_vam_retry(
             &state, &app, &client, &legal_moves, &ai_side, &lang, &notes, pseudo, min_tokens,
-            max_retries, &failed_moves, generation,
+            max_retries, &failed_moves, generation, &cancel_flag,
         )
         .await;
     }
@@ -361,7 +376,7 @@ pub async fn ai_move(
     // 4. 单采样模式：直接走 VAM 重试循环
     ai_move_vam_retry(
         &state, &app, &client, &legal_moves, &ai_side, &lang, &notes, pseudo, min_tokens,
-        max_retries, &[], generation,
+        max_retries, &[], generation, &cancel_flag,
     )
     .await
 }
@@ -373,6 +388,8 @@ pub async fn ai_move(
 ///
 /// `generation` 是发起此次 ai_move 时快照的对局代次，每次 make_move 前校验，
 /// 若代次已变（用户重置/开始新对局）则放弃走法，避免旧请求污染新对局。
+///
+/// `cancel_flag` 用于取消正在进行的 DeepSeek 请求（用户暂停/重置时设置）。
 async fn ai_move_vam_retry(
     state: &State<'_, AppState>,
     app: &tauri::AppHandle,
@@ -386,6 +403,7 @@ async fn ai_move_vam_retry(
     max_retries: u32,
     initial_failed: &[String],
     generation: u64,
+    cancel_flag: &AtomicBool,
 ) -> Result<MoveResult, String> {
     let mut last_error = String::new();
     let mut failed_moves: Vec<String> = initial_failed.to_vec();
@@ -403,9 +421,10 @@ async fn ai_move_vam_retry(
             build_messages(game, ai_side, lang, notes, &failed_moves, pseudo, min_tokens)
         };
         let (content, reasoning, usage) = client
-            .chat_stream(messages, app, legal_moves.to_vec(), pseudo, false, None)
+            .chat_stream(messages, app, legal_moves.to_vec(), pseudo, false, None, cancel_flag)
             .await?;
 
+        // 如果被取消返回了 Err，? 操作符会直接 return Err("请求已取消")
         // 校验对局代次：若已变更则放弃此次走法
         if state.current_generation() != generation {
             return Err("对局已变更，请求已取消".to_string());
@@ -559,6 +578,8 @@ pub async fn reset_game(
     let game = ChessGame::new(player_side, white_player, black_player);
     let mut game_lock = state.game.lock().unwrap();
     *game_lock = Some(game);
+    // 取消正在进行的 DeepSeek 请求
+    state.cancel_current_request();
     // 递增对局代次，使进行中的旧 ai_move 请求放弃走法
     state.bump_generation();
     // 重开清空注意事项（跨回合记忆）

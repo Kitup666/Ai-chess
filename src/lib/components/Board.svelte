@@ -15,6 +15,7 @@
   } from "../stores/game";
   import { playerMove } from "../api";
   import { continueAfterHumanMove, driveTurn } from "../stores/playerManager";
+  import { settings } from "../stores/settings";
   import { parseFen, squareName, type PieceType } from "../types";
   import { throttledMultiPVList, isAnalyzing } from "../stockfish/store";
   import { highlightedPV } from "../stockfish/highlight";
@@ -51,8 +52,8 @@
   // 玩家执黑(flipped=true)→AI(白)在棋盘下方→思考条放下方
   let aiOnTop = $derived($gameState.player_side === "white");
 
-  // 是否显示思考条：AI 思考时始终显示（风的加护仅控制具体思考内容与举棋标记）
-  let showThinkingOverlay = $derived($aiThinking);
+  // 是否显示思考条：AI 思考时且位置为"棋盘旁"时显示
+  let showThinkingOverlay = $derived($aiThinking && $settings.thinkingPosition === "board");
 
   // 玩家举棋状态：点击合法目标格后短暂抬起再走棋
   // 声明在 liftingSquare 之前，确保响应式依赖正确追踪

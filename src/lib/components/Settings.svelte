@@ -55,6 +55,7 @@
   let reasoningEffort = $derived($settings.reasoningEffort);
   let minThinkingTokens = $derived($settings.minThinkingTokens);
   let selfConsistencySamples = $derived($settings.selfConsistencySamples);
+  let thinkingPosition = $derived($settings.thinkingPosition);
   let started = $derived($settings.started);
   let whitePlayer = $derived($settings.whitePlayer);
   let blackPlayer = $derived($settings.blackPlayer);
@@ -255,6 +256,25 @@
     </div>
     <p class="hint">
       强制 AI 输出至少这么多 token 的思考内容（0=不限制）。伪思考模式默认至少 300 token。数值越大思考越深入但成本越高。推荐 300-800。
+    </p>
+  </div>
+
+  <div class="section">
+    <div class="label">思考链位置</div>
+    <div class="seg-group">
+      <button
+        class="seg-btn"
+        class:active={thinkingPosition === "board"}
+        onclick={() => updateSettings({ thinkingPosition: "board" })}
+      >棋盘旁 · 单行</button>
+      <button
+        class="seg-btn"
+        class:active={thinkingPosition === "left"}
+        onclick={() => updateSettings({ thinkingPosition: "left" })}
+      >左边栏 · 多行</button>
+    </div>
+    <p class="hint">
+      棋盘旁：AI 思考时在棋盘外侧显示单行最新一句。左边栏：固定显示完整多行思考链。
     </p>
   </div>
 

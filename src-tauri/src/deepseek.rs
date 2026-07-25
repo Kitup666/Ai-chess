@@ -1,6 +1,7 @@
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter};
 
 // DeepSeek API 地址（不带 /v1，与官方文档 curl 示例一致）
@@ -179,6 +180,7 @@ impl DeepSeekClient {
         pseudo: bool,
         silent: bool,
         temperature: Option<f64>,
+        cancel_flag: &AtomicBool,
     ) -> Result<(String, String, Usage), String> {
         let req = self.build_request(messages, true, pseudo, temperature);
 
@@ -239,6 +241,11 @@ impl DeepSeekClient {
         const CHUNK_TIMEOUT_SECS: u64 = 30;
 
         loop {
+            // 检查取消标志：用户暂停/重置时设置，检测到后立即退出以关闭 HTTP 连接
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Err("请求已取消".to_string());
+            }
+
             // 用 tokio::time::timeout 包裹 stream.next()，防止流式卡住无限期挂起
             let next_chunk = tokio::time::timeout(
                 std::time::Duration::from_secs(CHUNK_TIMEOUT_SECS),

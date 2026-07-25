@@ -14,6 +14,7 @@ import {
   type BestMove,
 } from "./engine";
 import { settings } from "../stores/settings";
+import { cancelDeepSeek } from "../api";
 
 /// 引擎单例（全局唯一）
 let engineInstance: StockfishEngine | null = null;
@@ -203,6 +204,7 @@ export function stopAnalysis(): void {
     isAnalyzing.set(false);
     isPaused.set(false);
   }
+  cancelDeepSeek();
 }
 
 /// 暂停分析（停止搜索但保留结果，可恢复）
@@ -212,6 +214,7 @@ export function pauseAnalysis(): void {
     isPaused.set(true);
     isAnalyzing.set(false);
   }
+  cancelDeepSeek();
 }
 
 /// 恢复分析（从暂停状态继续，重新搜索当前局面）

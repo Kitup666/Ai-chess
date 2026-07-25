@@ -15,6 +15,7 @@ const CHESS_RULES_BRIEF_ZH: &str = r#"
 
 子力：兵1 马3 象3 车5 后9 王∞ 双象+0.5
 送子禁：目标被攻击且无保护=禁。兑子须能回吃或有利交换(如车换后)。
+危险：<danger>列出己方悬空子(被攻击且无保护)，须优先防守：逃跑/垫子/吃攻子。
 "#;
 
 /// 国际象棋规则要点（英文版，精简压缩省 token）
@@ -31,6 +32,7 @@ Input:
 
 Material: P1 N3 B3 R5 Q9 K∞ bishop pair +0.5
 No blunder: target attacked & undefended=forbidden. Trades need recapture or favorable exchange (e.g. R for Q).
+Danger: <danger>lists own hanging pieces (attacked & undefended). MUST defend: retreat/block/capture attacker.
 "#;
 
 /// 最近走法历史的步数（取最近 N 步，含双方）
@@ -86,11 +88,16 @@ fn system_message(language: &str, pseudo: bool, min_thinking_tokens: u32) -> Cha
                  - 每步必须先检查：对方是否有高价值子在我方攻击范围内且无保护（送子）\n\
                  - 如果对方送子（无保护的敌后/车/象/马在我方攻击范围），必须吃掉，评分+5以上\n\
                  - 如果对方走法导致子力悬殊（如敌后可被我兵吃），必须吃，评分+9\n\
-                 - 吃子时仍需检查目标格是否被对方反吃（避免送子换送子）\n\n\
-                 [MUST] 系统分析流程（必须按顺序执行，每步都不能少）：\n\
-                 第1步：#盘面 评估当前局面（己方王位+对方所有子位+己方关键子）\n\
-                 第2步：!威胁 逐子检查（对方每个子的攻击目标+我方被威胁子），至少3行\n\
-                 第3步：检查对方是否送子（敌高价值子在我方攻击范围且无保护）→如有，优先吃子\n\
+                  - 吃子时仍需检查目标格是否被对方反吃（避免送子换送子）\n\n\
+                  [CRITICAL] 危险防守（<danger>=己方被攻击且无保护的棋子，违反=送子）：\n\
+                  - <danger> 内的棋子正被对方攻击且无保护，优先级高于一切进攻\n\
+                  - 必须立刻防守：①逃跑（最优先，移到安全格）②垫子挡住攻击 ③吃掉攻击子\n\
+                  - 若不防守 <danger> 棋子=送子，评分-5以下\n\
+                  - 防守后仍需检查其他 <danger> 棋子是否全部安全\n\n\
+                  [MUST] 系统分析流程（必须按顺序执行，每步都不能少）：\n\
+                  第1步：#盘面 评估当前局面（己方王位+对方所有子位+己方关键子）\n\
+                  第2步：!威胁 逐子检查（对方每个子的攻击目标+我方被威胁子+<danger>悬空子），至少3行\n\
+                  第3步：检查<danger>（己方悬空子无保护）→如有，优先防守；再检查对方是否送子→如有，优先吃子\n\
                  第4步：列出至少10个候选走法（@UCI），覆盖6个战略方向：控中/保王/反击/兑换/扩张/防御\n\
                  第5步：对每个候选输出 %应对 行，分析对手最佳应对及我方反招\n\
                  第6步：排除送子走法（目标格被攻击且无保护，评分-5以下）\n\
@@ -179,8 +186,9 @@ fn system_message(language: &str, pseudo: bool, min_thinking_tokens: u32) -> Cha
                  - !威胁 行少于3行\n\
                  - 缺少 <compare> 对比环节或 <reflect> 反思环节\n\
                  - 思考总行数少于40行\n\
-                 - 送子（把高价值子走到被攻击格）\n\
-                 - 不吃对方送的子\n\
+                  - 送子（把高价值子走到被攻击格）\n\
+                  - 不吃对方送的子\n\
+                  - 不防守 <danger> 己方悬空子\n\
                  - @UCI 行缺少 分:N 评分\n\
                  - 候选只覆盖单一战略方向\n\n\
                  [OUTPUT] 思考放 <LMTHINK></LMTHINK> 内（每行 @UCI+连接词+理由+评分，每个候选后跟 %应对 分析对手应对，每2个候选插一行 #盘面 确认棋子状态）。\n\
@@ -256,11 +264,16 @@ fn system_message(language: &str, pseudo: bool, min_thinking_tokens: u32) -> Cha
                  - Every move MUST first check: is there an enemy high-value piece in our attack range and unprotected (hanging)?\n\
                  - If enemy hangs a piece (unprotected enemy Q/R/B/N in our attack range), MUST capture it, score +5 or above\n\
                  - If enemy move causes material disparity (e.g. enemy Q capturable by our pawn), MUST capture, score +9\n\
-                 - When capturing, still check if target square is counter-attacked (avoid trading hang for hang)\n\n\
-                 [MUST] Systematic analysis flow (must execute in order, every step required):\n\
-                 Step 1: #board evaluate current position (own king + all enemy pieces + own key piece)\n\
-                 Step 2: !threat per-piece check (each enemy piece's attack target + our threatened piece), at least 3 lines\n\
-                 Step 3: check if enemy hangs a piece (enemy high-value piece in our range and unprotected) → if yes, prioritize capture\n\
+                  - When capturing, still check if target square is counter-attacked (avoid trading hang for hang)\n\n\
+                  [CRITICAL] Danger defense (<danger>=own pieces attacked & undefended, violation=blunder):\n\
+                  - Pieces in <danger> are attacked by enemy with no defender, priority OVER all attacks\n\
+                  - MUST defend immediately: ①retreat (highest priority, move to safe square) ②block attacker ③capture attacker\n\
+                  - Not defending <danger> pieces=blunder, score -5 or below\n\
+                  - After defending, re-check all <danger> pieces are safe\n\n\
+                  [MUST] Systematic analysis flow (must execute in order, every step required):\n\
+                  Step 1: #board evaluate current position (own king + all enemy pieces + own key piece)\n\
+                  Step 2: !threat per-piece check (each enemy piece's attack target + our threatened piece + <danger> hanging), at least 3 lines\n\
+                  Step 3: check <danger> (own hanging undefended) → if yes, prioritize defense; then check if enemy hangs a piece → if yes, prioritize capture\n\
                  Step 4: list at least 10 candidate moves (@UCI), covering 6 strategic directions: center/king-safety/counterattack/trade/expansion/defense\n\
                  Step 5: for each candidate output %resp line, analyze opponent's best response and our counter\n\
                  Step 6: eliminate hanging moves (target square attacked and unprotected, score -5 or below)\n\
@@ -349,8 +362,9 @@ fn system_message(language: &str, pseudo: bool, min_thinking_tokens: u32) -> Cha
                  - Fewer than 3 !threat lines\n\
                  - Missing <compare> comparison or <reflect> reflection\n\
                  - Fewer than 40 thinking lines\n\
-                 - Hanging pieces (moving high-value piece to attacked square)\n\
-                 - Not capturing enemy hanging pieces\n\
+                  - Hanging pieces (moving high-value piece to attacked square)\n\
+                  - Not capturing enemy hanging pieces\n\
+                  - Not defending <danger> own hanging pieces\n\
                  - @UCI line missing score:N\n\
                  - Candidates covering only single strategic direction\n\n\
                  [OUTPUT] Thinking in <LMTHINK></LMTHINK> (each line @UCI+connector+reason+score, each candidate followed by %resp analyzing opponent response, insert #board every 2 candidates to confirm piece status).\n\
@@ -514,14 +528,24 @@ fn user_message(game: &ChessGame, ai_side: &str, last_notes: &str, excluded: &[S
         format!("<hanging>{}</hanging>", hanging.join(" "))
     };
 
+    // 己方悬空子预计算：检测己方被攻击且无保护的棋子（危险！）。
+    // LLM 常忽略自己棋子的防守，预计算后通过 <danger> 警告 AI 必须优先防守。
+    let danger = game.own_hanging();
+    let danger_xml = if danger.is_empty() {
+        "<danger/>".to_string()
+    } else {
+        format!("<danger>{}</danger>", danger.join(" "))
+    };
+
     let content = format!(
-        "选最佳走法。\n<state>side:{ai_side} turn:{turn} fen:{fen}</state>\n<board>\n{board_str}\n</board>\n<hist_block>{hist_xml}</hist_block>\n<legal>{legal_str}</legal>\n{hanging_xml}\n{notes_xml}\n回复 <move>UCI</move>",
+        "选最佳走法。\n<state>side:{ai_side} turn:{turn} fen:{fen}</state>\n<board>\n{board_str}\n</board>\n<hist_block>{hist_xml}</hist_block>\n<legal>{legal_str}</legal>\n{hanging_xml}\n{danger_xml}\n{notes_xml}\n回复 <move>UCI</move>",
         ai_side = ai_side,
         fen = fen,
         turn = turn,
         board_str = board_str,
         hist_xml = hist_xml,
         hanging_xml = hanging_xml,
+        danger_xml = danger_xml,
         notes_xml = notes_xml,
         legal_str = legal.join(" ")
     );

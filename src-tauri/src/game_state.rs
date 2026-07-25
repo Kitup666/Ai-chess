@@ -2,7 +2,8 @@ use crate::chess_engine::{color_opposite, color_to_str, ChessGame};
 use crate::deepseek::DeepSeekClient;
 use chess::BoardStatus;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// 全局应用状态（由 Tauri 管理）
 pub struct AppState {
@@ -15,6 +16,9 @@ pub struct AppState {
     /// ai_move 在发起请求前快照当前代次，应用走法前校验代次是否变化，
     /// 变化则说明用户已开始新对局或重置，旧请求应放弃走法避免污染新对局
     pub game_generation: Mutex<u64>,
+    /// 取消标志：设为 true 时正在进行的 chat_stream 会在下一个 chunk 检测到并退出，
+    /// 从而关闭 HTTP 连接，让 DeepSeek 服务端也停止生成，节省 token。
+    pub cancel_flag: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -63,6 +67,7 @@ impl AppState {
             settings: Mutex::new(Settings::default()),
             last_notes: Mutex::new(String::new()),
             game_generation: Mutex::new(0),
+            cancel_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -78,6 +83,22 @@ impl AppState {
     /// ai_move 在发起请求前快照此值，应用走法前再次读取并比较
     pub fn current_generation(&self) -> u64 {
         *self.game_generation.lock().unwrap()
+    }
+
+    /// 取消当前正在进行的 DeepSeek 请求
+    /// 设置 cancel_flag 后，chat_stream 的 chunk 循环会在下一个 chunk 检测到并退出
+    pub fn cancel_current_request(&self) {
+        self.cancel_flag.store(true, Ordering::SeqCst);
+    }
+
+    /// 重置取消标志（新请求开始前调用）
+    pub fn reset_cancel_flag(&self) {
+        self.cancel_flag.store(false, Ordering::SeqCst);
+    }
+
+    /// 获取取消标志的引用（传给 chat_stream）
+    pub fn cancel_flag(&self) -> Arc<AtomicBool> {
+        self.cancel_flag.clone()
     }
 }
 

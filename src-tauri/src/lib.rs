@@ -110,6 +110,7 @@ pub fn run() {
             commands::undo_move,
             commands::load_state,
             commands::update_settings,
+            commands::cancel_deepseek,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
