@@ -153,21 +153,3 @@ export function lastCacheHitRate(usage: Usage | null): number {
   if (!usage || usage.prompt_tokens === 0) return 0;
   return Math.round((usage.prompt_cache_hit_tokens / usage.prompt_tokens) * 1000) / 10;
 }
-
-/// 计算今日缓存命中率（百分比，保留 1 位小数）
-export function dailyCacheHitRate(stats: CostStats): number {
-  if (stats.dailyPromptTokens === 0) return 0;
-  return Math.round((stats.dailyCachedTokens / stats.dailyPromptTokens) * 1000) / 10;
-}
-
-/// 重置今日统计（调试用）
-export function resetDailyCost(): void {
-  saveDaily(emptyDaily());
-  costStats.update((stats) => ({
-    ...stats,
-    dailyCost: 0,
-    dailyPromptTokens: 0,
-    dailyCompletionTokens: 0,
-    dailyCachedTokens: 0,
-  }));
-}

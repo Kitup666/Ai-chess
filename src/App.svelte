@@ -22,7 +22,8 @@
   import { resetGame, undoMove, startGame, onAiThinking, onAiThinkingReset, onAiPick, onAiPickReset, onAiUsage, loadState } from "./lib/api";
   import { resetManager, driveTurn, stopAutoPlay, resetStopFlag } from "./lib/stores/playerManager";
   import { boardFlipped, toggleBoardFlipped } from "./lib/stores/boardOrientation";
-  import type { GameStateDto, PlayerType } from "./lib/types";
+  import { playSound, preloadSounds } from "./lib/sounds/player";
+  import type { PlayerType } from "./lib/types";
   import Board from "./lib/components/Board.svelte";
   import Settings from "./lib/components/Settings.svelte";
   import EvalBar from "./lib/components/EvalBar.svelte";
@@ -31,7 +32,6 @@
   import {
     engineStatus,
     currentInfo,
-    isAnalyzing,
     loadEngine,
     analyzePosition,
     stopAnalysis,
@@ -90,7 +90,6 @@
     !$isPlayerTurn &&
     !gameEnded
   );
-  let playerTurn = $derived($isPlayerTurn);
 
   /// 当前轮到方主体类型
   let currentPlayerType = $derived.by(() => {
@@ -181,6 +180,38 @@
     analyzePosition(currentFen).catch(() => {});
   });
 
+  // 游戏结束音效监听（Lichess 风格：将杀时播放胜利/失败音效）
+  // 用 lastEndStatus 去重，避免同一终局状态重复触发
+  let lastEndStatus = "";
+  $effect(() => {
+    const status = $gameState.status;
+    const started = $settings.started;
+    // 仅在游戏进行中且状态为终局时触发
+    if (!started) return;
+    if (status !== "checkmate" && status !== "stalemate" && status !== "draw") return;
+    // 去重
+    const sig = `${status}-${$gameState.fen}`;
+    if (sig === lastEndStatus) return;
+    lastEndStatus = sig;
+
+    // 将杀时播放 victory/defeat（仅玩家参与的对局）
+    if (status === "checkmate") {
+      const playerSide = $gameState.player_side;
+      // 将杀时 g.turn 是被将死方，赢家是对方
+      const loserSide = $gameState.turn;
+      const winnerSide = loserSide === "white" ? "black" : "white";
+      // 仅当玩家参与对局时播放胜利/失败音效
+      const hasHuman = $settings.whitePlayer === "human" || $settings.blackPlayer === "human";
+      if (hasHuman) {
+        if (playerSide === winnerSide) {
+          playSound("victory");
+        } else {
+          playSound("defeat");
+        }
+      }
+    }
+  });
+
   // 切换 Stockfish 引擎开关（启用/关闭引擎，控制 Worker 生命周期）
   async function toggleStockfish() {
     if ($engineStatus === "unloaded") {
@@ -203,6 +234,8 @@
 
   // 监听 AI 思考事件（流式增量 + 重置）+ 启动加载持久化状态
   onMount(() => {
+    // 预加载所有音效（加速首次播放，避免 autoplay 限制）
+    preloadSounds();
     // 启动加载持久化状态（异步执行，不阻塞 onMount cleanup 返回）
     (async () => {
       try {
@@ -346,7 +379,8 @@
   /// 任一方为 DeepSeek 时需要 API Key
   let needApiKey = $derived(whitePlayer === "deepseek" || blackPlayer === "deepseek");
 
-  /// 开始新对局（从 Welcome 页面点击）
+  /// 开始新对局（统一入口：Welcome 页面 + Settings 面板的"开始对弈"按钮都走这里）
+  /// 处理 startGame API + resetManager + pendingStart 标记，避免入口重复逻辑
   async function handleStart() {
     // 新开对局不是恢复的对局，清除标志
     resumedFromPersist = false;
@@ -379,6 +413,10 @@
       resetManager(white, black);
       updateSettings({ started: true });
       updateGameState(state);
+      // 关闭设置抽屉（窄屏模式下从 Settings 点开始对弈时）
+      drawerOpen = false;
+      // 对局开始：播放 Lichess 通知音
+      playSound("gameStart");
       // 若第一步轮到自动主体（白方是 AI/鳕鱼），设置 pendingStart 等待用户点"开始对局"
       // 若白方是人，pendingStart 保持 false，用户直接点棋盘走棋
       if (white !== "human") {
@@ -479,10 +517,10 @@
     </div>
     <div class="toolbar-actions">
       {#if started}
-        <button class="bar-btn" onclick={handleUndo} disabled={!canUndo}>悔棋</button>
-        <button class="bar-btn" onclick={handleReset}>重开</button>
-        <button class="bar-btn retry-btn" class:failed={$aiFailed} onclick={handleRetry} disabled={!canRetry}>重新请求</button>
-        <span class="divider"></span>
+        <button class="bar-btn" onclick={handleUndo} disabled={!canUndo} aria-label="悔棋">悔棋</button>
+        <button class="bar-btn" onclick={handleReset} aria-label="重开对局">重开</button>
+        <button class="bar-btn retry-btn" class:failed={$aiFailed} onclick={handleRetry} disabled={!canRetry} aria-label="重新请求 AI 走棋">重新请求</button>
+        <span class="divider" aria-hidden="true"></span>
         <button
           class="bar-btn sf-btn"
           class:on={$engineStatus !== "unloaded"}
@@ -490,11 +528,13 @@
           onclick={toggleStockfish}
           disabled={sfLoading}
           title="启用/关闭鳕鱼引擎"
+          aria-label="启用或关闭鳕鱼引擎"
+          aria-pressed={$engineStatus !== "unloaded"}
         >鳕鱼{$engineStatus !== "unloaded" ? " · 开" : ""}</button>
-        <button class="bar-btn narrow-hide" onclick={togglePanel} title={panelCollapsed ? "展开面板" : "收起面板"}>
+        <button class="bar-btn narrow-hide" onclick={togglePanel} title={panelCollapsed ? "展开面板" : "收起面板"} aria-label={panelCollapsed ? "展开面板" : "收起面板"}>
           {panelCollapsed ? "展开面板" : "收起面板"}
         </button>
-        <button class="bar-btn narrow-only" onclick={toggleDrawer} title="打开设置抽屉">设置</button>
+        <button class="bar-btn narrow-only" onclick={toggleDrawer} title="打开设置抽屉" aria-label="打开设置抽屉">设置</button>
       {/if}
     </div>
   </header>
@@ -527,7 +567,7 @@
             {:else if activeTab === "analysis"}
               <AnalysisPanel />
             {:else}
-              <Settings onStarted={() => {}} onExit={handleExit} />
+              <Settings onStarted={handleStart} onExit={handleExit} />
             {/if}
           </div>
         {/if}
@@ -562,17 +602,17 @@
 
     <div class="actions-cell">
       <!-- 对局控制按钮（开始对弈/开始对局/继续对局/暂停/继续） -->
-      <div class="game-controls">
+      <div class="game-controls" role="group" aria-label="对局控制">
         {#if !started}
-          <button class="ctrl-btn primary" onclick={handleStart}>开始对弈</button>
+          <button class="ctrl-btn primary" onclick={handleStart} aria-label="开始对弈">开始对弈</button>
         {:else if pendingStart && currentIsAuto}
-          <button class="ctrl-btn primary" onclick={handleStartGame}>开始对局</button>
+          <button class="ctrl-btn primary" onclick={handleStartGame} aria-label="开始对局，让 AI 走第一步">开始对局</button>
         {:else if isResumedGame && currentIsAuto}
-          <button class="ctrl-btn primary" onclick={handleResume}>继续对局</button>
+          <button class="ctrl-btn primary" onclick={handleResume} aria-label="继续对局，让 AI 走棋">继续对局</button>
         {:else if isPaused}
-          <button class="ctrl-btn" onclick={handlePauseResume}>继续</button>
+          <button class="ctrl-btn" onclick={handlePauseResume} aria-label="继续对局">继续</button>
         {:else}
-          <button class="ctrl-btn" onclick={handlePauseResume} disabled={!currentIsAuto}>暂停</button>
+          <button class="ctrl-btn" onclick={handlePauseResume} disabled={!currentIsAuto} aria-label="暂停对局">暂停</button>
         {/if}
       </div>
 
@@ -630,7 +670,7 @@
       <button class="drawer-close" onclick={() => (drawerOpen = false)}>✕</button>
     </div>
     <div class="drawer-body">
-      <Settings onStarted={() => (drawerOpen = false)} onExit={handleExit} />
+      <Settings onStarted={handleStart} onExit={handleExit} />
     </div>
   </aside>
 
@@ -905,10 +945,6 @@
     opacity: 0.3;
     cursor: not-allowed;
   }
-  .bar-btn.active {
-    background: var(--accent);
-    color: #fff;
-  }
   .bar-btn.retry-btn {
     color: var(--ink-muted);
   }
@@ -1009,35 +1045,6 @@
     background: var(--accent);
     color: #fff;
     border-color: var(--accent);
-  }
-  .toggle {
-    width: 36px;
-    height: 20px;
-    border: 1px solid var(--line);
-    background: var(--bg-soft);
-    position: relative;
-    cursor: pointer;
-    padding: 0;
-    transition: background 0.2s var(--ease), border-color 0.2s var(--ease);
-    border-radius: 0;
-  }
-  .toggle.on {
-    background: var(--accent);
-    border-color: var(--accent);
-  }
-  .toggle-thumb {
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 14px;
-    height: 14px;
-    background: var(--ink);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15);
-    transition: transform 0.2s var(--ease);
-  }
-  .toggle.on .toggle-thumb {
-    transform: translateX(16px);
-    background: var(--board-light);
   }
 
   /* ===== 鳕鱼引擎按钮 + 评估 ===== */

@@ -43,20 +43,6 @@ showThinking.subscribe((v) => {
   }
 });
 
-/// 当前选中的格子的合法走法
-export const legalMovesForSelected = derived(
-  [gameState, selectedSquare],
-  ([$game, $sel]) => {
-    if (!$sel) return [];
-    return $game.legal_moves.filter((m) => m.startsWith($sel));
-  }
-);
-
-/// 游戏是否进行中
-export const isPlaying = derived(gameState, ($g) =>
-  $g.status === "playing" || $g.status === "thinking"
-);
-
 /// 当前轮到方主体是否为 Human（用于决定是否允许手动点击走棋）
 /// 三方主体架构下：白方 turn 看 white_player，黑方 turn 看 black_player
 export const isPlayerTurn = derived(gameState, ($g) => {

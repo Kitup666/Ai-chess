@@ -1,4 +1,5 @@
-import { writable } from "svelte/store";
+import { writable, derived } from "svelte/store";
+import { gameState } from "./game";
 
 const STORAGE_KEY = "ai-chess-board-flipped";
 
@@ -8,7 +9,6 @@ function loadInitial(): boolean {
 }
 
 /// 棋盘手动翻转状态（用户偏好，持久化到 localStorage）
-/// 与 player_side === "black" 的基础翻转做 XOR 得到最终 flipped
 const boardFlipped = writable<boolean>(loadInitial());
 
 boardFlipped.subscribe((v) => {
@@ -24,5 +24,12 @@ boardFlipped.subscribe((v) => {
 export function toggleBoardFlipped() {
   boardFlipped.update((v) => !v);
 }
+
+/// 最终棋盘翻转状态：基础翻转（player_side === "black"）与用户手动翻转做 XOR
+/// Board/EvalBar 等组件统一订阅此 store，避免重复实现 XOR 逻辑
+export const boardEffectiveFlipped = derived(
+  [gameState, boardFlipped],
+  ([$game, $flipped]) => ($game.player_side === "black") !== $flipped
+);
 
 export { boardFlipped };

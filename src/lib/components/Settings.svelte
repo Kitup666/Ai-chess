@@ -1,6 +1,6 @@
 <script lang="ts">
   import { settings, updateSettings } from "../stores/settings";
-  import { startGame, updateSettingsApi, resetGame } from "../api";
+  import { updateSettingsApi, resetGame } from "../api";
   import { gameState, updateGameState, showError, aiReasoning, aiFailed } from "../stores/game";
   import { resetManager, driveTurn, stopAutoPlay } from "../stores/playerManager";
   import type { PlayerType } from "../types";
@@ -41,6 +41,8 @@
     onStarted = () => {},
     onExit = () => {},
   }: {
+    /// 开始新对局回调：由 App.svelte 统一处理 startGame + resetManager + pendingStart
+    /// 避免入口重复逻辑
     onStarted?: () => void;
     onExit?: () => void;
   } = $props();
@@ -59,7 +61,6 @@
   let stockfishElo = $derived($settings.stockfishElo);
   let stockfishSkill = $derived($settings.stockfishSkill);
   let useStockfishElo = $derived($settings.useStockfishElo);
-  let starting = $state(false);
   let saving = $state(false);
 
   const models = [
@@ -90,52 +91,9 @@
     updateSettings({ blackPlayer: p });
   }
 
-  async function handleStart() {
-    if (needApiKey && !apiKey.trim()) {
-      showError("请填入 API Key");
-      return;
-    }
-    starting = true;
-    try {
-      aiReasoning.set("");
-      aiFailed.set(false);
-      const state = await startGame({
-        side: "white",
-        api_key: apiKey,
-        model,
-        thinking,
-        pseudo_thinking: pseudoThinking,
-        thinking_language: thinkingLanguage,
-        reasoning_effort: reasoningEffort,
-        min_thinking_tokens: minThinkingTokens,
-        self_consistency_samples: selfConsistencySamples,
-        white_player: whitePlayer,
-        black_player: blackPlayer,
-      });
-      // 重置 PlayerManager（按新主体组合构造）
-      resetManager(whitePlayer, blackPlayer);
-      updateSettings({ started: true });
-      updateGameState(state);
-      onStarted();
-      // 对局开始：播放 Lichess 通知音
-      playSound("gameStart");
-      // 驱动当前轮到方走棋（若白方是自动主体则开始走，若白方是人则等待点击）
-      // 用 setTimeout 确保 UI 先渲染
-      setTimeout(() => {
-        driveTurn(state).catch((e) => {
-          showError(String(e));
-          aiFailed.set(true);
-        });
-      }, 0);
-    } catch (e) {
-      showError(String(e));
-    } finally {
-      starting = false;
-    }
-  }
-
   // 游戏中修改设置后，即时应用到后端
   // 主体变更时自动重开游戏（避免 PlayerManager 与后端状态不一致导致双人模式误触发 AI）
+  // Stockfish 难度变化无需 resetManager：stockfish player 在 requestMove 时实时从 store 读取难度
   async function handleApplySettings() {
     if (needApiKey && !apiKey.trim()) {
       showError("请填入 API Key");
@@ -409,12 +367,13 @@
       <button class="btn-primary" onclick={handleApplySettings} disabled={saving}>
         {saving ? "保存中..." : "应用设置"}
       </button>
-      <button class="btn-ghost" onclick={onExit} disabled={starting} style="margin-top: 8px;">
+      <button class="btn-ghost" onclick={onExit} style="margin-top: 8px;">
         退出当前对局
       </button>
     {:else}
-      <button class="btn-primary" onclick={handleStart} disabled={starting}>
-        {starting ? "正在开局..." : "开始对弈"}
+      <!-- 开始对弈按钮：调用 onStarted 回调，由 App.svelte 统一处理 startGame + resetManager + pendingStart -->
+      <button class="btn-primary" onclick={onStarted}>
+        开始对弈
       </button>
     {/if}
   </div>
@@ -444,36 +403,6 @@
   }
   .label {
     margin-bottom: 0;
-  }
-  /* 方形拨动开关（符合用户偏好：方形、内高亮） */
-  .toggle {
-    width: 40px;
-    height: 22px;
-    border: 1px solid var(--border);
-    background: var(--bg-soft);
-    position: relative;
-    cursor: pointer;
-    padding: 0;
-    transition: background 0.2s var(--ease), border-color 0.2s var(--ease);
-    border-radius: 0;
-  }
-  .toggle.on {
-    background: var(--accent);
-    border-color: var(--accent);
-  }
-  .toggle-thumb {
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 16px;
-    height: 16px;
-    background: var(--ink);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15);
-    transition: transform 0.2s var(--ease);
-  }
-  .toggle.on .toggle-thumb {
-    transform: translateX(18px);
-    background: var(--board-light);
   }
   .actions {
     padding-top: var(--sp-3);

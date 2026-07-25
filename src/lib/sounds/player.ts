@@ -2,7 +2,7 @@
 //
 // 设计要点：
 // - 10 个 MP3 文件在构建时由 Vite 打包，运行时通过 URL 加载
-// - HTMLAudioElement 缓存：避免每次播放重新创建对象
+// - 每次播放创建新 Audio 对象：避免复用导致的 currentTime 重置冲突和播放中断问题
 // - 音量/静音设置持久化到 localStorage（独立于后端 settings，避免频繁改 Rust 端）
 // - autoplay 限制：浏览器可能阻止未用户激活的播放，首次播放需在用户点击后
 
@@ -46,35 +46,52 @@ const SOUND_FILES: Record<SoundName, string> = {
   draw: DrawMp3,
 };
 
+// 预加载的 Audio 对象（用于预热浏览器音频解码，首次播放更快）
 const audioCache: Map<SoundName, HTMLAudioElement> = new Map();
 const VOLUME_KEY = "chess_sound_volume";
 const ENABLED_KEY = "chess_sound_enabled";
 
-function getAudio(name: SoundName): HTMLAudioElement | null {
-  if (typeof window === "undefined") return null;
-  let audio = audioCache.get(name);
-  if (!audio) {
+/// 预加载所有音效（应用启动时调用一次，加速首次播放）
+export function preloadSounds(): void {
+  if (typeof window === "undefined") return;
+  for (const name of Object.keys(SOUND_FILES) as SoundName[]) {
     const src = SOUND_FILES[name];
-    if (!src) return null;
-    audio = new Audio(src);
+    const audio = new Audio(src);
     audio.preload = "auto";
+    audio.load();
     audioCache.set(name, audio);
   }
-  return audio;
 }
 
 /// 播放指定音效。音量/静音从 localStorage 读取。
+/// 每次创建新 Audio 对象避免复用冲突（连续快速播放同一音效时旧对象还在播放）
 export function playSound(name: SoundName): void {
   if (!getSoundEnabled()) return;
-  const audio = getAudio(name);
-  if (!audio) return;
+  const src = SOUND_FILES[name];
+  if (!src) return;
 
-  const vol = getSoundVolume() / 100;
-  audio.volume = Math.max(0, Math.min(1, vol));
-  // 重置播放位置：连续触发同一音效时立即重播
-  audio.currentTime = 0;
+  const vol = Math.max(0, Math.min(1, getSoundVolume() / 100));
+  // 每次创建新 Audio 对象，避免复用导致的播放冲突
+  const audio = new Audio(src);
+  audio.volume = vol;
   // autoplay 限制：首次未用户交互时浏览器会拒绝，catch 静默处理
-  audio.play().catch(() => {});
+  const playPromise = audio.play();
+  if (playPromise) {
+    playPromise.catch(() => {
+      // 播放失败（autoplay 限制）：尝试从缓存的对象播放
+      const cached = audioCache.get(name);
+      if (cached) {
+        cached.volume = vol;
+        cached.currentTime = 0;
+        cached.play().catch(() => {});
+      }
+    });
+  }
+  // 播放结束后释放资源
+  audio.addEventListener("ended", () => {
+    audio.src = "";
+    audio.remove();
+  });
 }
 
 /// 音量（0-100），默认 70
@@ -103,7 +120,7 @@ export function setSoundEnabled(enabled: boolean): void {
 }
 
 /// 根据 UCI 走法判断走法类型
-export function classifyMove(uci: string): "castle" | "promote" | "normal" {
+function classifyMove(uci: string): "castle" | "promote" | "normal" {
   if (uci.length === 5) return "promote";
   // 王车易位：王从 e1/e8 走两格到 g1/c1/g8/c8
   if (/^e1[g|c]1$|^e8[g|c]8$/.test(uci)) return "castle";
@@ -112,7 +129,7 @@ export function classifyMove(uci: string): "castle" | "promote" | "normal" {
 
 /// 判断是否吃子：检查目标格在旧 FEN 中是否有棋子
 /// toSquare 如 "e4"
-export function isCaptureMove(oldFen: string, toSquare: string): boolean {
+function isCaptureMove(oldFen: string, toSquare: string): boolean {
   const file = toSquare.charCodeAt(0) - 97; // 0-7 (a-h)
   const rank = parseInt(toSquare[1], 10) - 1; // 0-7 (1-8)
   if (file < 0 || file > 7 || rank < 0 || rank > 7) return false;
@@ -178,6 +195,7 @@ export function playMoveSounds(opts: {
   }
 
   if (inCheck) {
-    playSound("check");
+    // 延迟 150ms 播放将军音效，避免与走子音效并发冲突导致其中一个被吞
+    setTimeout(() => playSound("check"), 150);
   }
 }

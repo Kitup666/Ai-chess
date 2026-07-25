@@ -11,6 +11,10 @@ pub struct AppState {
     pub settings: Mutex<Settings>,
     /// 上次 AI 走子后输出的注意事项（局面+威胁+战略），下次请求注入 user_message
     pub last_notes: Mutex<String>,
+    /// 对局代次：每次 start_game / reset_game 时递增
+    /// ai_move 在发起请求前快照当前代次，应用走法前校验代次是否变化，
+    /// 变化则说明用户已开始新对局或重置，旧请求应放弃走法避免污染新对局
+    pub game_generation: Mutex<u64>,
 }
 
 #[derive(Clone)]
@@ -58,7 +62,22 @@ impl AppState {
             deepseek: Mutex::new(None),
             settings: Mutex::new(Settings::default()),
             last_notes: Mutex::new(String::new()),
+            game_generation: Mutex::new(0),
         }
+    }
+
+    /// 递增对局代次并返回新值
+    /// 在 start_game / reset_game 中调用，使进行中的旧 ai_move 请求在应用走法前能检测到代次变化
+    pub fn bump_generation(&self) -> u64 {
+        let mut g = self.game_generation.lock().unwrap();
+        *g = g.wrapping_add(1);
+        *g
+    }
+
+    /// 读取当前对局代次
+    /// ai_move 在发起请求前快照此值，应用走法前再次读取并比较
+    pub fn current_generation(&self) -> u64 {
+        *self.game_generation.lock().unwrap()
     }
 }
 

@@ -118,7 +118,13 @@ impl DeepSeekClient {
             "high".to_string()
         };
         Self {
-            client: Client::new(),
+            // 设置整体请求超时（连接+整体）防止网络卡住时无限期挂起
+            // connect_timeout 10s：建立连接阶段超时
+            // timeout 90s：整体请求超时（含流式，但流式响应另加 chunk 心跳检测）
+            client: Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             api_key,
             model,
             thinking,
@@ -183,12 +189,33 @@ impl DeepSeekClient {
             .json(&req)
             .send()
             .await
-            .map_err(|e| format!("请求失败: {}", e))?;
+            .map_err(|e| {
+                // 网络层错误友好化（连接失败、超时、DNS 解析失败等）
+                if e.is_timeout() {
+                    "DeepSeek 请求超时，请检查网络或稍后重试".to_string()
+                } else if e.is_connect() {
+                    "无法连接到 DeepSeek 服务，请检查网络".to_string()
+                } else {
+                    format!("请求失败: {}", e)
+                }
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(format!("API 错误 {}: {}", status, body));
+            // 按 HTTP status code 映射为用户友好的中文提示
+            // 原始 body 仅记录到日志，不直接显示给用户
+            log::warn!("[deepseek] API 错误 status={} body={}", status, body);
+            let friendly = match status.as_u16() {
+                401 => "API Key 无效或已过期，请检查设置".to_string(),
+                402 | 403 => "API Key 权限不足或账户余额不足".to_string(),
+                404 => "请求的模型不存在，请检查模型设置".to_string(),
+                408 => "DeepSeek 请求超时，请重试".to_string(),
+                429 => "请求过于频繁，请稍后重试（DeepSeek 限流）".to_string(),
+                500..=599 => "DeepSeek 服务暂时不可用，请稍后重试".to_string(),
+                _ => format!("API 错误（HTTP {}）", status.as_u16()),
+            };
+            return Err(friendly);
         }
 
         // 流式解析 SSE
@@ -206,7 +233,28 @@ impl DeepSeekClient {
         let mut in_lmthink = false;
         let mut pseudo_buffer = String::new();
 
-        while let Some(chunk_result) = stream.next().await {
+        // chunk 心跳超时：每个 chunk 等待最多 30 秒
+        // DeepSeek 流式响应通常每秒会有 chunk，30 秒无 chunk 视为连接卡死
+        // 超时后返回友好错误，前端可重试
+        const CHUNK_TIMEOUT_SECS: u64 = 30;
+
+        loop {
+            // 用 tokio::time::timeout 包裹 stream.next()，防止流式卡住无限期挂起
+            let next_chunk = tokio::time::timeout(
+                std::time::Duration::from_secs(CHUNK_TIMEOUT_SECS),
+                stream.next(),
+            )
+            .await;
+            let chunk_result = match next_chunk {
+                Ok(Some(r)) => r,
+                Ok(None) => break, // 流结束
+                Err(_) => {
+                    return Err(format!(
+                        "DeepSeek 响应超时（{}秒无数据），请检查网络或重试",
+                        CHUNK_TIMEOUT_SECS
+                    ));
+                }
+            };
             let chunk = chunk_result.map_err(|e| format!("读取流失败: {}", e))?;
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 

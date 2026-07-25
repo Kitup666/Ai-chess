@@ -25,5 +25,6 @@ tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
 chess = "3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+image = "0.25"
 futures-util = "0.3"

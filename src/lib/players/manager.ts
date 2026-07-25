@@ -20,6 +20,9 @@ export class PlayerManager {
   private stepCount = 0;
   private readonly maxSteps = 200;
   private readonly stepDelay = 300;
+  /// 代际标记：每次 driveTurn/reset 递增，旧循环检测到代际不匹配立即退出
+  /// 用于防止暂停/重置后旧循环的 requestMove Promise resolve 继续走棋导致双重走棋
+  private generation = 0;
 
   constructor(white: PlayerType, black: PlayerType, sfOpts: StockfishOptions) {
     this.whitePlayer = createPlayer(white, sfOpts);
@@ -33,9 +36,12 @@ export class PlayerManager {
     state: GameStateDto,
     onMoveApplied: (result: MoveResult) => Promise<void> | void
   ): Promise<void> {
+    // 代际递增：让上一轮正在 await requestMove 的旧循环退出
+    this.generation++;
     this.stopped = false;
     this.stepCount = 0;
-    await this.driveLoop(state, onMoveApplied);
+    const myGen = this.generation;
+    await this.driveLoop(state, onMoveApplied, myGen);
   }
 
   /// Human 走棋后继续驱动（若对方是自动主体）
@@ -43,15 +49,18 @@ export class PlayerManager {
     state: GameStateDto,
     onMoveApplied: (result: MoveResult) => Promise<void> | void
   ): Promise<void> {
-    await this.driveLoop(state, onMoveApplied);
+    // Human 走棋触发的驱动沿用当前代际（不递增，因为是同一对局的延续）
+    const myGen = this.generation;
+    await this.driveLoop(state, onMoveApplied, myGen);
   }
 
   private async driveLoop(
     state: GameStateDto,
-    onMoveApplied: (result: MoveResult) => Promise<void> | void
+    onMoveApplied: (result: MoveResult) => Promise<void> | void,
+    myGen: number
   ): Promise<void> {
     let current = state;
-    while (!this.stopped) {
+    while (!this.stopped && myGen === this.generation) {
       if (current.status !== "playing") break;
       if (this.stepCount >= this.maxSteps) break;
       const player = current.turn === "white" ? this.whitePlayer : this.blackPlayer;
@@ -59,7 +68,11 @@ export class PlayerManager {
       if (!player.isAutomatic || !player.requestMove) break;
       // 自动主体请求走法
       const result = await player.requestMove(current);
+      // 代际检查：等待期间若被 reset/driveTurn 取消，丢弃结果直接退出
+      if (this.stopped || myGen !== this.generation) return;
       await onMoveApplied(result);
+      // 应用走法后再次检查代际（防止 onMoveApplied 期间发生 reset）
+      if (this.stopped || myGen !== this.generation) return;
       this.stepCount++;
       if (result.game_over) break;
       current = result.state;
@@ -74,7 +87,9 @@ export class PlayerManager {
   }
 
   /// 重置停止状态和步数计数
+  /// 代际递增：让旧循环退出，避免暂停后 Promise resolve 继续走棋
   reset(): void {
+    this.generation++;
     this.stopped = false;
     this.stepCount = 0;
   }

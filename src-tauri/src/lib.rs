@@ -22,6 +22,15 @@ pub fn run() {
                 )?;
             }
 
+            if let Some(window) = app.get_webview_window("main") {
+                if let Ok(img) = image::open("icons/icon.png") {
+                    let rgba = img.to_rgba8();
+                    let (w, h) = rgba.dimensions();
+                    let icon = tauri::image::Image::new_owned(rgba.into_raw(), w, h);
+                    let _ = window.set_icon(icon);
+                }
+            }
+
             // 加载持久化存档，恢复设置与对局
             if let Some(save) = persistence::load(app.handle()) {
                 let state = app.state::<AppState>();

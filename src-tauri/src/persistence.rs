@@ -56,6 +56,10 @@ fn default_black_player() -> String {
 /// 持久化存档结构（对局 + 设置）
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SaveData {
+    /// 存档格式版本号：用于未来结构变更时的迁移识别
+    /// 旧存档无此字段时 #[serde(default)] 回退 1（当前版本）
+    #[serde(default = "default_version")]
+    pub version: u32,
     pub has_game: bool,
     pub player_side: String, // "white" | "black"
     pub fen: String,
@@ -73,6 +77,14 @@ pub struct SaveData {
     pub black_player: String,
 }
 
+/// 当前存档格式版本号
+pub const CURRENT_VERSION: u32 = 1;
+
+/// version 字段缺省值（旧存档无此字段时回退 1）
+fn default_version() -> u32 {
+    1
+}
+
 /// 获取存档文件路径（app_data_dir 下）
 fn save_path(app: &AppHandle) -> Option<std::path::PathBuf> {
     match app.path().app_data_dir() {
@@ -84,14 +96,28 @@ fn save_path(app: &AppHandle) -> Option<std::path::PathBuf> {
     }
 }
 
-/// 保存存档到 app_data_dir/chess_state.json
+/// 保存存档到 app_data_dir/chess_state.json（原子写入）
+///
+/// 原子写入策略：先写入临时文件 .tmp，再 rename 到目标文件。
+/// std::fs::rename 在同一文件系统下是原子操作（Windows 用 MoveFileExW + REPLACE_EXISTING），
+/// 即使写入过程中崩溃，也只会留下 .tmp 文件，不会损坏目标存档。
 pub fn save(app: &AppHandle, data: &SaveData) -> Result<(), String> {
     let path = save_path(app).ok_or_else(|| "无法解析存档路径".to_string())?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("创建存档目录失败: {}", e))?;
     }
-    let json = serde_json::to_string_pretty(data).map_err(|e| format!("序列化存档失败: {}", e))?;
-    std::fs::write(&path, json).map_err(|e| format!("写入存档失败: {}", e))?;
+    // 写入当前版本号
+    let mut data = data.clone();
+    data.version = CURRENT_VERSION;
+    let json = serde_json::to_string_pretty(&data).map_err(|e| format!("序列化存档失败: {}", e))?;
+    // 原子写入：先写临时文件，再 rename
+    let tmp_path = path.with_extension("json.tmp");
+    std::fs::write(&tmp_path, &json).map_err(|e| format!("写入临时存档失败: {}", e))?;
+    std::fs::rename(&tmp_path, &path).map_err(|e| {
+        // rename 失败时尝试清理临时文件
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("重命名存档失败: {}", e)
+    })?;
     Ok(())
 }
 
@@ -108,6 +134,14 @@ pub fn load(app: &AppHandle) -> Option<SaveData> {
     };
     match serde_json::from_str::<SaveData>(&content) {
         Ok(mut data) => {
+            // 版本号检查：若存档版本高于当前版本，记录警告（向前兼容：仍尝试加载）
+            if data.version > CURRENT_VERSION {
+                log::warn!(
+                    "存档版本 {} 高于当前支持版本 {}，可能存在兼容性问题",
+                    data.version,
+                    CURRENT_VERSION
+                );
+            }
             // 旧存档迁移：若 white_player/black_player 为空串（手动写入或异常），
             // 按 player_side 推断默认主体组合（人 vs DeepSeek）
             if data.white_player.is_empty() || data.black_player.is_empty() {

@@ -16,10 +16,10 @@
   import { playerMove } from "../api";
   import { continueAfterHumanMove, driveTurn } from "../stores/playerManager";
   import { parseFen, squareName, type PieceType } from "../types";
-  import { multiPVList, isAnalyzing } from "../stockfish/store";
+  import { throttledMultiPVList, isAnalyzing } from "../stockfish/store";
   import { highlightedPV } from "../stockfish/highlight";
-  import { boardFlipped, toggleBoardFlipped } from "../stores/boardOrientation";
-  import { playMoveSounds } from "../sounds/player";
+  import { boardEffectiveFlipped } from "../stores/boardOrientation";
+  import { playMoveSounds, playSound } from "../sounds/player";
   // 棋子 SVG 资源（Cburnett 风格，公共域）
   import wK from "../assets/pieces/wK.svg";
   import wQ from "../assets/pieces/wQ.svg";
@@ -93,10 +93,6 @@
     }
     return null;
   });
-
-  // 举棋棋子向目标方向的偏移（已废弃，保留空值避免模板引用报错）
-  // 改为 SVG 箭头层单独绘制路径
-  let liftOffset = $derived({ dx: 0, dy: 0 });
 
   // AI 举棋时，棋子到目标格的箭头坐标（百分比，相对棋盘）
   // 仅 AI 思考 + 风的加护开启时显示箭头；玩家举棋不画箭头（已有目标格圆圈指示）
@@ -177,9 +173,8 @@
   // 棋盘方向：基础翻转（玩家执黑时自动翻转）与用户手动翻转做 XOR
   // 玩家执白+不翻转=白在底；玩家执白+翻转=黑在底
   // 玩家执黑+不翻转=黑在底（自动看自己方）；玩家执黑+翻转=白在底
-  let flipped = $derived(
-    ($gameState.player_side === "black") !== $boardFlipped
-  );
+  // 使用共享 derived store，与 EvalBar 等组件保持一致
+  let flipped = $derived($boardEffectiveFlipped);
 
   // UCI 走法 → 棋盘百分比坐标（用于引擎评估箭头）
   // 复用 arrowCoords 的坐标系：file 0-7 → 6.25%~93.75%；rank 0(底)-7(顶) → 93.75%~6.25%
@@ -235,10 +230,10 @@
     return `M ${sLeftX} ${sLeftY} L ${eLeftX} ${eLeftY} L ${hLeftX} ${hLeftY} L ${to.x} ${to.y} L ${hRightX} ${hRightY} L ${eRightX} ${eRightY} L ${sRightX} ${sRightY} Z`;
   }
 
-  // 引擎评估箭头：多 PV 的第一步走法
+  // 引擎评估箭头：多 PV 的第一步走法（订阅节流版，避免高频更新卡顿）
   // PV1=绿色，PV2=黄色，PV3+=琥珀色；高亮的加粗+更亮
   let evalArrows = $derived.by(() => {
-    const list = $multiPVList;
+    const list = $throttledMultiPVList;
     if (list.length === 0 || (!$isAnalyzing && $highlightedPV === null)) return [];
     return list
       .map((info, idx) => {
@@ -338,6 +333,8 @@
     if (cellPiece && cellPiece.color === $gameState.turn) {
       selectedSquare.set(square);
       playerLiftSquare = square;
+      // 选中音效（Lichess 无专门选中音效，复用 Move 音效作为轻反馈）
+      playSound("move");
     } else {
       selectedSquare.set(null);
       playerLiftSquare = null;
@@ -604,8 +601,9 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: min(72vh, 560px);
-    height: min(72vh, 560px);
+    /* 棋盘尺寸：取 vh 和 vw 的较小值，确保窄屏不溢出 */
+    width: min(72vh, 92vw, 560px);
+    height: min(72vh, 92vw, 560px);
     box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4), 0 1px 0 var(--board-frame);
   }
 
@@ -813,7 +811,7 @@
     display: flex;
     align-items: center;
     gap: var(--sp-2);
-    width: min(72vh, 560px);
+    width: min(72vh, 92vw, 560px);
     padding: var(--sp-2) var(--sp-4);
     background: var(--surface);
     border: 1px solid var(--line);

@@ -32,6 +32,28 @@ export interface Settings {
   useStockfishElo: boolean;
 }
 
+/// 鳕鱼难度相关设置的 localStorage 持久化
+/// 这三项设置仅前端使用（不经过后端），独立持久化到 localStorage
+/// 后端 SettingsSave 不包含这些字段，避免 Rust 端结构变更
+const SF_ELO_KEY = "chess_sf_elo";
+const SF_SKILL_KEY = "chess_sf_skill";
+const SF_USE_ELO_KEY = "chess_sf_use_elo";
+
+function loadSfElo(): number {
+  if (typeof localStorage === "undefined") return 1500;
+  const v = parseInt(localStorage.getItem(SF_ELO_KEY) || "", 10);
+  return Number.isFinite(v) && v >= 1320 && v <= 3190 ? v : 1500;
+}
+function loadSfSkill(): number {
+  if (typeof localStorage === "undefined") return 10;
+  const v = parseInt(localStorage.getItem(SF_SKILL_KEY) || "", 10);
+  return Number.isFinite(v) && v >= 0 && v <= 20 ? v : 10;
+}
+function loadSfUseElo(): boolean {
+  if (typeof localStorage === "undefined") return true;
+  return localStorage.getItem(SF_USE_ELO_KEY) !== "false";
+}
+
 const initialSettings: Settings = {
   apiKey: "",
   model: "deepseek-v4-flash",
@@ -45,12 +67,20 @@ const initialSettings: Settings = {
   started: false,
   whitePlayer: "human",
   blackPlayer: "deepseek",
-  stockfishElo: 1500,
-  stockfishSkill: 10,
-  useStockfishElo: true,
+  stockfishElo: loadSfElo(),
+  stockfishSkill: loadSfSkill(),
+  useStockfishElo: loadSfUseElo(),
 };
 
 export const settings = writable<Settings>(initialSettings);
+
+/// 订阅 stockfish 难度设置变化，持久化到 localStorage
+settings.subscribe((s) => {
+  if (typeof localStorage === "undefined") return;
+  localStorage.setItem(SF_ELO_KEY, String(s.stockfishElo));
+  localStorage.setItem(SF_SKILL_KEY, String(s.stockfishSkill));
+  localStorage.setItem(SF_USE_ELO_KEY, String(s.useStockfishElo));
+});
 
 export function updateSettings(partial: Partial<Settings>) {
   settings.update((s) => ({ ...s, ...partial }));

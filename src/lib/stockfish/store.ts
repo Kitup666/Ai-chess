@@ -1,18 +1,19 @@
 /// Stockfish 引擎状态管理（Svelte store）
 ///
 /// 提供引擎单例、状态、评估信息、多PV变着、最佳走法的响应式管理。
-/// 难度/深度设置持久化到 localStorage。
+/// 分析深度持久化到 localStorage；难度设置由 settings store 统一持久化。
 ///
 /// 评估值说明：UCI score 是"当前轮到方"视角（cp 35 表示当前方优势 +0.35）。
 /// UI 显示时需根据 FEN 的 turn 转换为白方视角。
 
-import { writable, derived, get } from "svelte/store";
+import { writable, get } from "svelte/store";
 import {
   StockfishEngine,
   type EngineStatus,
   type SearchInfo,
   type BestMove,
 } from "./engine";
+import { settings } from "../stores/settings";
 
 /// 引擎单例（全局唯一）
 let engineInstance: StockfishEngine | null = null;
@@ -23,9 +24,6 @@ let lastAnalyzedFen: string = "";
 /// 引擎状态：unloaded | loading | ready | searching
 export const engineStatus = writable<EngineStatus>("unloaded");
 
-/// 引擎版本（从 id name 行解析，如 "Stockfish 18 ...")
-export const engineVersion = writable<string>("");
-
 /// 最新评估信息（multipv=1 的 info 行，即最佳走法的搜索信息）
 /// 保留向后兼容（App.svelte 底部评估显示用）
 export const currentInfo = writable<SearchInfo | null>(null);
@@ -34,13 +32,35 @@ export const currentInfo = writable<SearchInfo | null>(null);
 /// 每个深度递增时实时刷新，深度回退（新搜索）时清空
 export const multiPVList = writable<SearchInfo[]>([]);
 
-/// 稳定评估值（只在深度递增时更新，避免 EvalBar 跳动）
+/// 节流版多 PV 列表（供 UI 订阅，避免高频 info 导致 PV 列表卡顿）
+/// Stockfish 搜索时每秒可能输出数十个 info，每个 info 都触发 multiPVList 更新
+/// 进而引发 SAN 转换和 DOM 重渲染。节流到 120ms 一次，人眼无感且大幅降低渲染压力。
+/// 内部逻辑（stableScore 计算）仍订阅原始 multiPVList 保证数据准确性。
+const PV_THROTTLE_MS = 120;
+let pvLastEmit = 0;
+let pvPendingTimer: ReturnType<typeof setTimeout> | null = null;
+export const throttledMultiPVList = writable<SearchInfo[]>([]);
+multiPVList.subscribe((list) => {
+  const now = Date.now();
+  if (now - pvLastEmit >= PV_THROTTLE_MS) {
+    pvLastEmit = now;
+    throttledMultiPVList.set(list);
+  } else {
+    if (pvPendingTimer) clearTimeout(pvPendingTimer);
+    pvPendingTimer = setTimeout(() => {
+      pvLastEmit = Date.now();
+      pvPendingTimer = null;
+      throttledMultiPVList.set(get(multiPVList));
+    }, PV_THROTTLE_MS - (now - pvLastEmit));
+  }
+});
+
+/// 稳定评估值（只在深度递增且达到最低显示深度时更新，避免 EvalBar 跳动）
 /// 同深度内的多次 score 变化不刷新显示
+/// 最低显示深度：跳过深度 1~2（评估不稳定），从深度 3 开始显示
+const MIN_STABLE_DEPTH = 3;
 let lastStableDepth = 0;
 export const stableScore = writable<{ score: SearchInfo["score"] | null; depth: number } | null>(null);
-
-/// 最近一次搜索的最佳走法结果（bestmove 行）
-export const lastBestMove = writable<BestMove | null>(null);
 
 /// 是否正在分析（searching 状态且用于分析模式）
 export const isAnalyzing = writable<boolean>(false);
@@ -50,19 +70,6 @@ export const isPaused = writable<boolean>(false);
 
 /// MultiPV 条数（分析模式输出前 N 条变着，1=只最佳）
 export const multiPVCount = writable<number>(3);
-
-/// 难度等级（0-20），持久化
-/// 10=中等人类水平，20=最强（默认），0=最弱（随机走法）
-export const stockfishSkill = writable<number>(
-  typeof localStorage !== "undefined" && localStorage.getItem("chess_sf_skill")
-    ? parseInt(localStorage.getItem("chess_sf_skill")!, 10) || 20
-    : 20
-);
-stockfishSkill.subscribe((v) => {
-  if (typeof localStorage !== "undefined") {
-    localStorage.setItem("chess_sf_skill", String(v));
-  }
-});
 
 /// 分析深度（plies），持久化
 export const analysisDepth = writable<number>(
@@ -84,15 +91,6 @@ export const searchProgress = writable<{ depth: number; seldepth: number; nodes:
   nps: 0,
   time: 0,
 });
-
-/// 引擎是否已就绪（ready 或 searching）
-export const engineReady = derived(engineStatus, (s) => s === "ready" || s === "searching");
-
-/// 最佳走法（multiPVList[0] 的 pv 首步）
-export const bestMove = derived(multiPVList, (list) => list[0]?.pv?.[0] ?? null);
-
-/// 最佳评估分数（原始，当前轮到方视角）
-export const bestScore = derived(multiPVList, (list) => list[0]?.score ?? null);
 
 /// 当前评估分数（白方视角，厘兵值）
 /// 正数=白优，负数=黑优。mate 用大数表示（±100000）
@@ -140,15 +138,14 @@ export function getEngine(): StockfishEngine {
           nps: info.nps ?? 0,
           time: info.time ?? 0,
         });
-        // 稳定评估值：只在深度递增时更新，避免 EvalBar 同深度内跳动
-        if (info.depth > lastStableDepth) {
+        // 稳定评估值：只在深度递增且达到最低显示深度时更新，避免 EvalBar 同深度内跳动和开局不稳定值跳动
+        if (info.depth > lastStableDepth && info.depth >= MIN_STABLE_DEPTH) {
           lastStableDepth = info.depth;
           stableScore.set({ score: info.score, depth: info.depth });
         }
       }
     };
-    engineInstance.onBestMove = (best) => {
-      lastBestMove.set(best);
+    engineInstance.onBestMove = () => {
       isAnalyzing.set(false);
       isPaused.set(false);
       // 搜索完成：用最终深度值更新 stableScore（bestmove 前最后一个 info 即最终深度）
@@ -167,9 +164,13 @@ export async function loadEngine(): Promise<void> {
   const engine = getEngine();
   if (engine.status === "unloaded") {
     await engine.load();
-    engineVersion.set(engine.version);
-    // 应用持久化的设置
-    await engine.setSkillLevel(get(stockfishSkill));
+    // 应用持久化的设置：难度从 settings store 读取（与 stockfish player 一致）
+    const s = get(settings);
+    if (s.useStockfishElo) {
+      await engine.setElo(s.stockfishElo);
+    } else {
+      await engine.setSkillLevel(s.stockfishSkill);
+    }
     await engine.setMultiPV(get(multiPVCount));
     await engine.newGame();
   }
@@ -189,7 +190,8 @@ export async function analyzePosition(fen: string, depth?: number): Promise<void
   currentInfo.set(null);
   searchProgress.set({ depth: 0, seldepth: 0, nodes: 0, nps: 0, time: 0 });
   lastStableDepth = 0;
-  stableScore.set(null);
+  // 保留 stableScore 旧值不重置，新评估达到 MIN_STABLE_DEPTH 后方才更新，
+  // 避免 EvalBar 在开局搜索初始阶段跳动到 50% 再弹回。  
   const d = depth ?? get(analysisDepth);
   engine.search(fen, { depth: d });
 }
@@ -235,15 +237,6 @@ export async function getBestMove(fen: string, movetime: number = 1000): Promise
   return engine.getBestMove(fen, { movetime });
 }
 
-/// 应用难度设置到引擎
-export async function applySkillLevel(level: number): Promise<void> {
-  stockfishSkill.set(level);
-  const engine = getEngine();
-  if (engine.status === "ready" || engine.status === "searching") {
-    await engine.setSkillLevel(level);
-  }
-}
-
 /// 应用 MultiPV 设置到引擎（设置后若正在分析则重新分析以应用新值）
 export async function applyMultiPV(n: number): Promise<void> {
   multiPVCount.set(n);
@@ -270,7 +263,6 @@ export function destroyEngine(): void {
     engineStatus.set("unloaded");
     currentInfo.set(null);
     multiPVList.set([]);
-    lastBestMove.set(null);
     isAnalyzing.set(false);
     isPaused.set(false);
     searchProgress.set({ depth: 0, seldepth: 0, nodes: 0, nps: 0, time: 0 });

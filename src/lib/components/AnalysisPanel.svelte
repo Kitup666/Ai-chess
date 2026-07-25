@@ -9,7 +9,7 @@
   /// 点击某条 PV 可高亮对应走法箭头（通过 highlightedPV store）
 
   import {
-    multiPVList,
+    throttledMultiPVList,
     searchProgress,
     isAnalyzing,
     isPaused,
@@ -34,9 +34,9 @@
   let fen = $derived($gameState.fen);
   let turn = $derived($gameState.turn as "white" | "black");
 
-  // 每条 PV 的显示数据
+  // 每条 PV 的显示数据（订阅节流版 multiPVList，避免高频更新卡顿）
   let pvLines = $derived.by(() => {
-    const list = $multiPVList;
+    const list = $throttledMultiPVList;
     if (list.length === 0) return [];
     return list.map((info, idx) => {
       const score = scoreFromWhitePerspective(info.score, turn);

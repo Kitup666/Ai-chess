@@ -35,6 +35,11 @@ pub async fn update_settings(
     };
     // 伪思考模式时强制关闭 API thinking（用提示词模拟思考）
     let real_thinking = if pseudo_thinking { false } else { thinking };
+    // 输入范围验证（防止用户输入异常值导致账单爆炸或服务限流）
+    // min_thinking_tokens: 0-8192，超出截断（前端 max=4096，后端放宽到 8192 兼容未来）
+    let safe_min_tokens = min_thinking_tokens.clamp(0, 8192);
+    // self_consistency_samples: 1-5，超出截断（多采样会同时发起多个 API 请求）
+    let safe_sc_samples = self_consistency_samples.clamp(1, 5);
     {
         let mut settings = state.settings.lock().unwrap();
         settings.api_key = api_key.clone();
@@ -43,8 +48,8 @@ pub async fn update_settings(
         settings.pseudo_thinking = pseudo_thinking;
         settings.thinking_language = language.clone();
         settings.reasoning_effort = effort.clone();
-        settings.min_thinking_tokens = min_thinking_tokens;
-        settings.self_consistency_samples = self_consistency_samples;
+        settings.min_thinking_tokens = safe_min_tokens;
+        settings.self_consistency_samples = safe_sc_samples;
     }
     // 重新创建 DeepSeek 客户端（传 real_thinking 而非 thinking）
     let client = DeepSeekClient::new(api_key, model, real_thinking, effort);
@@ -85,6 +90,8 @@ pub async fn start_game(
         side
     };
     let game = ChessGame::new(player_side, white_player, black_player);
+    // 递增对局代次，使进行中的旧 ai_move 请求放弃走法
+    state.bump_generation();
     // 语言空值兜底为 "zh"
     let language = if args.thinking_language.is_empty() {
         "zh".to_string()
@@ -109,8 +116,9 @@ pub async fn start_game(
         settings.pseudo_thinking = args.pseudo_thinking;
         settings.thinking_language = language;
         settings.reasoning_effort = effort;
-        settings.min_thinking_tokens = args.min_thinking_tokens;
-        settings.self_consistency_samples = args.self_consistency_samples;
+        // 输入范围验证（与 update_settings 保持一致）
+        settings.min_thinking_tokens = args.min_thinking_tokens.clamp(0, 8192);
+        settings.self_consistency_samples = args.self_consistency_samples.clamp(1, 5);
     }
     {
         let mut ds = state.deepseek.lock().unwrap();
@@ -152,6 +160,8 @@ pub async fn player_move(
 
     let status = game_status_str(game);
     let game_over = is_game_over(game);
+    let in_check = game.in_check();
+    log::info!("[player_move] 走法={} status={} game_over={} in_check={}", coord, status, game_over, in_check);
     let dto = game_to_dto(game, &status);
     drop(game_lock);
 
@@ -182,6 +192,9 @@ pub async fn ai_move(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<MoveResult, String> {
+    // 快照对局代次：每次 make_move 前校验，若代次已变（用户重置/开始新对局）则放弃走法
+    let generation = state.current_generation();
+
     // 1. 获取配置（合法走法列表用于举棋兜底；messages 在循环内重建以支持 VAM 迭代裁剪）
     let (max_retries, legal_moves, ai_side, lang, notes, pseudo, min_tokens, sc_samples) = {
         let game_lock = state.game.lock().unwrap();
@@ -250,6 +263,10 @@ pub async fn ai_move(
         // 3d. 投票选最佳走法
         if let Some(best_uci) = vote_best_move(&samples) {
             log::info!("[sc] 多采样投票冠军: {} (共 {} 个采样)", best_uci, samples.len());
+            // 校验对局代次：若已变更（用户重置/开始新对局）则放弃此次走法
+            if state.current_generation() != generation {
+                return Err("对局已变更，请求已取消".to_string());
+            }
             // 验证投票冠军合法性
             let mut game_lock = state.game.lock().unwrap();
             let game = game_lock.as_mut().ok_or("游戏未开始")?;
@@ -289,6 +306,10 @@ pub async fn ai_move(
         // 先解析第1次采样的走法
         let mut failed_moves: Vec<String> = Vec::new();
         {
+            // 校验对局代次：若已变更则放弃此次走法
+            if state.current_generation() != generation {
+                return Err("对局已变更，请求已取消".to_string());
+            }
             let mut game_lock = state.game.lock().unwrap();
             let game = game_lock.as_mut().ok_or("游戏未开始")?;
             let parse_result = if !content1.trim().is_empty() {
@@ -332,7 +353,7 @@ pub async fn ai_move(
         let _ = app.emit("ai-pick-reset", ());
         return ai_move_vam_retry(
             &state, &app, &client, &legal_moves, &ai_side, &lang, &notes, pseudo, min_tokens,
-            max_retries, &failed_moves,
+            max_retries, &failed_moves, generation,
         )
         .await;
     }
@@ -340,7 +361,7 @@ pub async fn ai_move(
     // 4. 单采样模式：直接走 VAM 重试循环
     ai_move_vam_retry(
         &state, &app, &client, &legal_moves, &ai_side, &lang, &notes, pseudo, min_tokens,
-        max_retries, &[],
+        max_retries, &[], generation,
     )
     .await
 }
@@ -349,6 +370,9 @@ pub async fn ai_move(
 ///
 /// 每次重试重建 messages（system+user 两条），不累积历史，省输入 token。
 /// 失败走法加入 failed_moves，下轮从合法走法列表中移除，缩窄动作空间提高命中率。
+///
+/// `generation` 是发起此次 ai_move 时快照的对局代次，每次 make_move 前校验，
+/// 若代次已变（用户重置/开始新对局）则放弃走法，避免旧请求污染新对局。
 async fn ai_move_vam_retry(
     state: &State<'_, AppState>,
     app: &tauri::AppHandle,
@@ -361,6 +385,7 @@ async fn ai_move_vam_retry(
     min_tokens: u32,
     max_retries: u32,
     initial_failed: &[String],
+    generation: u64,
 ) -> Result<MoveResult, String> {
     let mut last_error = String::new();
     let mut failed_moves: Vec<String> = initial_failed.to_vec();
@@ -381,6 +406,10 @@ async fn ai_move_vam_retry(
             .chat_stream(messages, app, legal_moves.to_vec(), pseudo, false, None)
             .await?;
 
+        // 校验对局代次：若已变更则放弃此次走法
+        if state.current_generation() != generation {
+            return Err("对局已变更，请求已取消".to_string());
+        }
         // 锁定棋局，解析验证并尝试应用
         let mut game_lock = state.game.lock().unwrap();
         let game = game_lock.as_mut().ok_or("游戏未开始")?;
@@ -397,6 +426,8 @@ async fn ai_move_vam_retry(
                 game.make_move(mv).map_err(|e| e)?;
                 let status = game_status_str(game);
                 let game_over = is_game_over(game);
+                let in_check = game.in_check();
+                log::info!("[ai_move] 走法={} status={} game_over={} in_check={}", coord, status, game_over, in_check);
                 let dto = game_to_dto(game, &status);
                 drop(game_lock);
                 // 提取本步总结并存到 AppState（跨回合记忆）
@@ -429,6 +460,10 @@ async fn ai_move_vam_retry(
     }
 
     // 兜底：取第一个合法走法
+    // 校验对局代次：若已变更则放弃兜底走法
+    if state.current_generation() != generation {
+        return Err("对局已变更，请求已取消".to_string());
+    }
     let mut game_lock = state.game.lock().unwrap();
     let game = game_lock.as_mut().ok_or("游戏未开始")?;
     let legal = game.legal_moves();
@@ -524,6 +559,8 @@ pub async fn reset_game(
     let game = ChessGame::new(player_side, white_player, black_player);
     let mut game_lock = state.game.lock().unwrap();
     *game_lock = Some(game);
+    // 递增对局代次，使进行中的旧 ai_move 请求放弃走法
+    state.bump_generation();
     // 重开清空注意事项（跨回合记忆）
     *state.last_notes.lock().unwrap() = String::new();
     let dto = game_to_dto(game_lock.as_ref().unwrap(), "playing");
@@ -587,6 +624,7 @@ fn build_save_data(state: &AppState, status: &str) -> SaveData {
     let game_lock = state.game.lock().unwrap();
     match game_lock.as_ref() {
         Some(game) => SaveData {
+            version: crate::persistence::CURRENT_VERSION,
             has_game: true,
             player_side: color_to_str(game.player_side),
             fen: game.to_fen(),
@@ -602,6 +640,7 @@ fn build_save_data(state: &AppState, status: &str) -> SaveData {
             black_player: game.black_player.clone(),
         },
         None => SaveData {
+            version: crate::persistence::CURRENT_VERSION,
             has_game: false,
             player_side: "white".to_string(),
             fen: String::new(),

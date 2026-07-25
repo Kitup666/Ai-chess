@@ -40,11 +40,6 @@ export function resetManager(white: PlayerType, black: PlayerType): PlayerManage
   return managerInstance;
 }
 
-/// 获取当前 PlayerManager（不创建）
-export function peekManager(): PlayerManager | null {
-  return managerInstance;
-}
-
 /// AI/鳕鱼走棋后的 FLIP 动画 + 音效
 /// 在 updateGameState 之前记录 from 棋子位置，updateGameState + tick 后做动画
 async function playAutoMoveAnimation(result: MoveResult): Promise<void> {
@@ -109,14 +104,28 @@ async function runFlipAnimation(
   fromEl.style.zIndex = "";
 }
 
+/// 判断是否为"对局已变更"错误（用户在 AI 思考期间重置/开始新对局导致旧请求被取消）
+/// 此类错误应静默处理，不弹错误提示，不设置 aiFailed
+function isGameCancelledError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return msg.includes("对局已变更");
+}
+
 /// 驱动当前轮到方走棋（自动主体连续走，直到 Human 方或游戏结束）
 /// 由 App.svelte 在 startGame/resetGame 完成后调用
 export async function driveTurn(state: GameStateDto): Promise<void> {
   const manager = getManager();
   aiFailed.set(false);
-  await manager.driveTurn(state, async (result) => {
-    await playAutoMoveAnimation(result);
-  });
+  try {
+    await manager.driveTurn(state, async (result) => {
+      await playAutoMoveAnimation(result);
+    });
+  } catch (e) {
+    // 对局已变更：用户在 AI 思考期间重置/开始新对局，旧请求被后端取消
+    // 此为预期行为，静默忽略，不弹错误也不设置 aiFailed
+    if (isGameCancelledError(e)) return;
+    throw e;
+  }
 }
 
 /// Human 走棋后继续驱动对方走棋
@@ -124,9 +133,14 @@ export async function driveTurn(state: GameStateDto): Promise<void> {
 export async function continueAfterHumanMove(state: GameStateDto): Promise<void> {
   const manager = managerInstance;
   if (!manager) return;
-  await manager.continueAfterHumanMove(state, async (result) => {
-    await playAutoMoveAnimation(result);
-  });
+  try {
+    await manager.continueAfterHumanMove(state, async (result) => {
+      await playAutoMoveAnimation(result);
+    });
+  } catch (e) {
+    if (isGameCancelledError(e)) return;
+    throw e;
+  }
 }
 
 /// 停止自对弈循环

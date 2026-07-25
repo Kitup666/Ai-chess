@@ -139,8 +139,8 @@ impl ChessGame {
     /// 是否将军（当前走棋方被将军）
     pub fn in_check(&self) -> bool {
         // chess crate 的 BoardStatus 仅区分 Ongoing/Checkmate/Stalemate
-        // 若为 Checkmate 则必然被将军；单"将军"态通过无合法解将走法判断
-        matches!(self.board.status(), BoardStatus::Checkmate)
+        // 通过 checkers() 检测当前走棋方被将军的棋子数量
+        self.board.checkers().popcnt() > 0
     }
 
     /// 悔棋（撤销最后一步）

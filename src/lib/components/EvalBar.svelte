@@ -9,7 +9,7 @@
 
   import { stableScore, scoreFromWhitePerspective } from "../stockfish/store";
   import { gameState } from "../stores/game";
-  import { boardFlipped } from "../stores/boardOrientation";
+  import { boardEffectiveFlipped } from "../stores/boardOrientation";
 
   // 白方视角评估值（厘兵，mate 用 ±100000）
   // 使用 stableScore：只在深度递增时更新，避免同深度内多次变化导致跳动
@@ -19,10 +19,8 @@
     return scoreFromWhitePerspective(stable.score, $gameState.turn as "white" | "black");
   });
 
-  // 棋盘是否翻转：基础翻转（玩家执黑）与用户手动翻转做 XOR，与 Board 保持一致
-  let flipped = $derived(
-    ($gameState.player_side === "black") !== $boardFlipped
-  );
+  // 棋盘是否翻转：使用共享 derived store，与 Board 保持一致
+  let flipped = $derived($boardEffectiveFlipped);
 
   // 白色段占比（0~1）
   // 线性映射：±5 兵（±500 厘兵）→ 0~1，超出截断
@@ -79,7 +77,7 @@
   .eval-bar {
     width: 24px;
     /* 高度与棋盘 .board-wrap 一致，确保视觉对齐 */
-    height: min(72vh, 560px);
+    height: min(72vh, 92vw, 560px);
     position: relative;
     display: flex;
     flex-direction: column-reverse; /* 白段在底部 */
