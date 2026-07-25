@@ -84,6 +84,10 @@ pub struct GameStateDto {
     pub legal_moves: Vec<String>,
     pub in_check: bool,
     pub ply: usize,
+    /// 白方主体类型："human" | "stockfish" | "deepseek"
+    pub white_player: String,
+    /// 黑方主体类型："human" | "stockfish" | "deepseek"
+    pub black_player: String,
 }
 
 #[derive(Serialize)]
@@ -115,6 +119,12 @@ pub struct StartGameArgs {
     /// Self-Consistency 多采样次数，缺省 1（关闭）
     #[serde(default)]
     pub self_consistency_samples: u32,
+    /// 白方主体类型："human" | "stockfish" | "deepseek"，缺省空串由命令侧兜底
+    #[serde(default)]
+    pub white_player: String,
+    /// 黑方主体类型："human" | "stockfish" | "deepseek"，缺省空串由命令侧兜底
+    #[serde(default)]
+    pub black_player: String,
 }
 
 /// 持久化设置 DTO（前端启动加载用）
@@ -167,5 +177,7 @@ pub fn game_to_dto(game: &ChessGame, status: &str) -> GameStateDto {
         legal_moves: game.legal_moves_str(),
         in_check: game.in_check(),
         ply: game.ply_count(),
+        white_player: game.white_player.clone(),
+        black_player: game.black_player.clone(),
     }
 }

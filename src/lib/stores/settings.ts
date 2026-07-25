@@ -1,5 +1,5 @@
 import { writable } from "svelte/store";
-import type { Side } from "../types";
+import type { Side, PlayerType } from "../types";
 
 export interface Settings {
   apiKey: string;
@@ -16,8 +16,20 @@ export interface Settings {
   /// 最少思考 token 数：注入提示词要求 AI 至少输出这么多 token 的思考内容
   /// 0 表示不限制。用于强制 AI 深度思考。
   minThinkingTokens: number;
+  /// Self-Consistency 多采样次数（1=关闭，>1=多次采样取多数走法）
+  selfConsistencySamples: number;
   side: Side;
   started: boolean;
+  /// 白方主体类型
+  whitePlayer: PlayerType;
+  /// 黑方主体类型
+  blackPlayer: PlayerType;
+  /// 鳕鱼 ELO 等级（1320-3190），useStockfishElo=true 时生效
+  stockfishElo: number;
+  /// 鳕鱼 Skill Level（0-20），useStockfishElo=false 时生效
+  stockfishSkill: number;
+  /// 是否用 ELO 模式控制鳕鱼难度（true=UCI_Elo，false=Skill Level）
+  useStockfishElo: boolean;
 }
 
 const initialSettings: Settings = {
@@ -28,8 +40,14 @@ const initialSettings: Settings = {
   thinkingLanguage: "zh",
   reasoningEffort: "high",
   minThinkingTokens: 0,
+  selfConsistencySamples: 1,
   side: "white",
   started: false,
+  whitePlayer: "human",
+  blackPlayer: "deepseek",
+  stockfishElo: 1500,
+  stockfishSkill: 10,
+  useStockfishElo: true,
 };
 
 export const settings = writable<Settings>(initialSettings);

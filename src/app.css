@@ -1,26 +1,26 @@
 /* ============================================
-   AI Chess · 设计系统「棋谱编辑部」
-   Editorial Minimalism — 暖纸 · 墨色 · 沉绿
+   AI Chess · 设计系统「Lichess 深色专业风」
+   Dark Professional — 深炭灰 · 暖棕棋盘 · Lichess 绿
    ============================================ */
 
 @import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap");
 
 :root {
-  /* 色彩 */
-  --bg: #f6f2ea;
-  --surface: #fcfaf5;
-  --surface-2: #efeae0;
-  --ink: #1b1a17;
-  --ink-muted: #8c857a;
-  --ink-faint: #b8b0a2;
-  --line: #e3ddd0;
-  --accent: #2e4a3e;
-  --accent-soft: #e8ede7;
-  --board-light: #ede4d3;
-  --board-dark: #5a7159;
-  --board-frame: rgba(27, 26, 23, 0.04);
-  --highlight: #c9a961;
-  --danger: #a8453a;
+  /* 色彩 — Lichess 深色主题 */
+  --bg: #161512;
+  --surface: #262421;
+  --surface-2: #302e2b;
+  --ink: #e8e6e3;
+  --ink-muted: #9a9893;
+  --ink-faint: #62625a;
+  --line: #3d3a37;
+  --accent: #629924;
+  --accent-soft: rgba(98, 153, 36, 0.15);
+  --board-light: #f0d9b5;
+  --board-dark: #b58863;
+  --board-frame: rgba(0, 0, 0, 0.3);
+  --highlight: rgba(98, 153, 36, 0.4);
+  --danger: #b8442e;
 
   /* 字体 */
   --font-display: "Fraunces", Georgia, serif;

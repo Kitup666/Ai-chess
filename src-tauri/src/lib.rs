@@ -76,6 +76,8 @@ pub fn run() {
                         .unwrap_or(chess::Color::White);
                     match crate::chess_engine::ChessGame::rebuild_from_history(
                         player_side,
+                        save.white_player.clone(),
+                        save.black_player.clone(),
                         save.move_history,
                     ) {
                         Ok(game) => {

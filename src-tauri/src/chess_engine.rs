@@ -7,15 +7,21 @@ pub struct ChessGame {
     pub move_history: Vec<ChessMove>,
     pub board_history: Vec<Board>, // 用于悔棋
     pub player_side: Color,
+    /// 白方主体类型："human" | "stockfish" | "deepseek"
+    pub white_player: String,
+    /// 黑方主体类型："human" | "stockfish" | "deepseek"
+    pub black_player: String,
 }
 
 impl ChessGame {
-    pub fn new(player_side: Color) -> Self {
+    pub fn new(player_side: Color, white_player: String, black_player: String) -> Self {
         Self {
             board: Board::default(),
             move_history: Vec::new(),
             board_history: Vec::new(),
             player_side,
+            white_player,
+            black_player,
         }
     }
 
@@ -61,6 +67,45 @@ impl ChessGame {
             .iter()
             .map(|mv| move_to_coord(mv))
             .collect()
+    }
+
+    /// 检测对方悬空子（己方可白吃且对方无法回吃的棋子）
+    ///
+    /// 基于 ChessArena 论文(arXiv:2509.24239)发现：LLM 战术推理弱，常错过对方送子。
+    /// 预计算悬空子信息，在 user_message 中提供给模型，减轻其战术计算负担。
+    ///
+    /// 算法：对每个己方吃子走法，模拟走子后检查对方能否回吃目标格。
+    /// 无法回吃 → 该对方棋子悬空，可白吃。
+    ///
+    /// 返回格式：["Qh4", "Bc5"]（大写=白方棋子，小写=黑方棋子）
+    pub fn enemy_hanging(&self) -> Vec<String> {
+        let mut hanging = Vec::new();
+        let my_moves = MoveGen::new_legal(&self.board);
+        for mv in my_moves {
+            let target = mv.get_dest();
+            // 只看吃子走法（目标格有对方棋子）
+            if let Some(enemy_piece) = self.board.piece_on(target) {
+                // 模拟走子（make_move_new 切换 side_to_move）
+                let after = self.board.make_move_new(mv);
+                // 检查对方能否回吃目标格
+                let can_recapture = MoveGen::new_legal(&after).any(|r| r.get_dest() == target);
+                if !can_recapture {
+                    // 对方悬空子，可白吃
+                    let is_white = self.board.color_on(target) == Some(Color::White);
+                    let pc = piece_to_char(enemy_piece);
+                    let piece_str = if is_white {
+                        pc.to_ascii_uppercase()
+                    } else {
+                        pc
+                    };
+                    let sq = square_to_str(target);
+                    hanging.push(format!("{}{}", piece_str, sq));
+                }
+            }
+        }
+        hanging.sort();
+        hanging.dedup();
+        hanging
     }
 
     /// 验证走法是否合法
@@ -117,9 +162,11 @@ impl ChessGame {
     /// 从初始局面重放走法历史，重建棋局（用于持久化恢复）
     pub fn rebuild_from_history(
         player_side: Color,
+        white_player: String,
+        black_player: String,
         moves: Vec<String>,
     ) -> Result<Self, String> {
-        let mut game = Self::new(player_side);
+        let mut game = Self::new(player_side, white_player, black_player);
         for mv_str in moves {
             let mv = parse_coord_move(&mv_str)
                 .ok_or_else(|| format!("无法解析走法: {}", mv_str))?;

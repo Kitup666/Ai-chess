@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { GameStateDto, LoadedState, MoveResult, StartGameArgs, Side } from "./types";
+import type { GameStateDto, LoadedState, MoveResult, StartGameArgs, Side, PlayerType } from "./types";
 import type { Usage } from "./stores/cost";
 
 /// 开始新游戏
@@ -23,12 +23,23 @@ export async function getGameState(): Promise<GameStateDto> {
   return invoke<GameStateDto>("get_game_state");
 }
 
-/// 重置游戏
-export async function resetGame(side: Side): Promise<GameStateDto> {
-  return invoke<GameStateDto>("reset_game", { side });
+/// 重置游戏（保留 DeepSeek 配置，可更换主体组合）
+/// @param side Human 视角执方（双自动或双人时仅用于初始化 turn 推导兜底）
+/// @param whitePlayer 白方主体
+/// @param blackPlayer 黑方主体
+export async function resetGame(
+  side: Side,
+  whitePlayer: PlayerType = "human",
+  blackPlayer: PlayerType = "deepseek"
+): Promise<GameStateDto> {
+  return invoke<GameStateDto>("reset_game", {
+    side,
+    whitePlayer,
+    blackPlayer,
+  });
 }
 
-/// 更新 DeepSeek 设置（API Key / 模型 / 思考模式 / 伪思考 / 思考语言 / 思考强度 / 最少思考token），即时生效
+/// 更新 DeepSeek 设置（API Key / 模型 / 思考模式 / 伪思考 / 思考语言 / 思考强度 / 最少思考token / 自洽采样次数），即时生效
 export async function updateSettingsApi(
   apiKey: string,
   model: string,
@@ -36,9 +47,10 @@ export async function updateSettingsApi(
   pseudoThinking: boolean,
   thinkingLanguage: "zh" | "en",
   reasoningEffort: "high" | "max",
-  minThinkingTokens: number
+  minThinkingTokens: number,
+  selfConsistencySamples: number
 ): Promise<void> {
-  return invoke("update_settings", { apiKey, model, thinking, pseudoThinking, thinkingLanguage, reasoningEffort, minThinkingTokens });
+  return invoke("update_settings", { apiKey, model, thinking, pseudoThinking, thinkingLanguage, reasoningEffort, minThinkingTokens, selfConsistencySamples });
 }
 
 /// 悔棋

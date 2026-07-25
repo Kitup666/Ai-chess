@@ -3,6 +3,9 @@
 export type Side = "white" | "black";
 export type GameStatus = "playing" | "thinking" | "checkmate" | "stalemate" | "draw";
 
+/// 对弈主体类型：人 / 鳕鱼(Stockfish) / DeepSeek
+export type PlayerType = "human" | "stockfish" | "deepseek";
+
 export interface MoveDto {
   from: string;
   to: string;
@@ -21,6 +24,10 @@ export interface GameStateDto {
   legal_moves: string[];
   in_check: boolean;
   ply: number;
+  /// 白方主体类型
+  white_player: PlayerType;
+  /// 黑方主体类型
+  black_player: PlayerType;
 }
 
 export interface MoveResult {
@@ -41,6 +48,12 @@ export interface StartGameArgs {
   reasoning_effort?: "high" | "max";
   /// 最少思考 token 数，缺省 0（不限制）
   min_thinking_tokens?: number;
+  /// Self-Consistency 多采样次数，缺省 1（关闭）
+  self_consistency_samples?: number;
+  /// 白方主体类型，缺省由后端兜底
+  white_player?: PlayerType;
+  /// 黑方主体类型，缺省由后端兜底
+  black_player?: PlayerType;
 }
 
 /// 持久化设置 DTO（load_state 返回）
@@ -52,6 +65,7 @@ export interface SettingsDto {
   thinking_language: "zh" | "en";
   reasoning_effort: "high" | "max";
   min_thinking_tokens: number;
+  self_consistency_samples: number;
 }
 
 /// load_state 命令返回结构

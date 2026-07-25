@@ -317,8 +317,8 @@ impl DeepSeekClient {
                         if reasoning_changed || content_changed {
                             let new_pick = extract_closed_move_tag(&full_content, &legal_moves)
                                 .or_else(|| extract_closed_move_tag(&full_reasoning, &legal_moves))
-                                .or_else(|| extract_at_pick(&full_reasoning))
-                                .or_else(|| extract_at_pick(&full_content))
+                                .or_else(|| extract_at_pick(&full_reasoning, &legal_moves))
+                                .or_else(|| extract_at_pick(&full_content, &legal_moves))
                                 .or_else(|| extract_open_move_tag(&full_reasoning, &legal_moves))
                                 .or_else(|| extract_open_move_tag(&full_content, &legal_moves))
                                 .or_else(|| {
@@ -374,7 +374,19 @@ fn find_safe_split(buffer: &str, tag: &str) -> usize {
 /// 用于"举棋"动画：模型在思考过程中可能多次输出 @UCI，取最新一个表示当前考虑的走法。
 /// UCI 走法格式：4 字符（如 e2e4）或 5 字符升变（如 e7e8q）。
 /// 匹配规则：`@` 后紧跟 4-5 字符 UCI，边界为非字母数字字符（或字符串首尾）。
-fn extract_at_pick(text: &str) -> Option<String> {
+///
+/// 【合法性校验】只接受位于 `legal_moves` 中的走法。
+/// AI 思考时会输出 `%应对 候选UCI→对手应招→我方反招` 行分析对手应招，
+/// 对手走法（如 d7d5）也是合法 UCI 格式，若不校验会被误识为己方举棋，
+/// 导致前端显示"从空格出子/操纵对方棋子"的错误举棋动画。
+fn extract_at_pick(text: &str, legal_moves: &[String]) -> Option<String> {
+    if legal_moves.is_empty() {
+        return None;
+    }
+    // 预计算小写合法走法集合，O(1) 查询
+    let legal_lower: std::collections::HashSet<String> =
+        legal_moves.iter().map(|m| m.to_lowercase()).collect();
+
     let lower = text.to_lowercase();
     let bytes = lower.as_bytes();
     let mut best: Option<String> = None;
@@ -394,7 +406,10 @@ fn extract_at_pick(text: &str) -> Option<String> {
                     let after = remaining.chars().nth(5);
                     if after.map_or(true, |c| !c.is_alphanumeric()) {
                         let mv: String = c5.iter().collect();
-                        best = Some(mv);
+                        // 合法性校验：必须是当前局面的己方合法走法
+                        if legal_lower.contains(&mv) {
+                            best = Some(mv);
+                        }
                         i += 6;
                         continue;
                     }
@@ -409,7 +424,10 @@ fn extract_at_pick(text: &str) -> Option<String> {
                     let after = remaining.chars().nth(4);
                     if after.map_or(true, |c| !c.is_alphanumeric()) {
                         let mv: String = c4.iter().collect();
-                        best = Some(mv);
+                        // 合法性校验：必须是当前局面的己方合法走法
+                        if legal_lower.contains(&mv) {
+                            best = Some(mv);
+                        }
                         i += 5;
                         continue;
                     }
@@ -582,27 +600,84 @@ mod tests {
 
     #[test]
     fn test_extract_at_pick() {
+        // 构造一个包含所有用例走法的合法走法列表
+        let legal = vec![
+            "e2e4".to_string(),
+            "d2d4".to_string(),
+            "e7e8q".to_string(),
+            "g1f3".to_string(),
+        ];
+
         // 单个 @UCI
-        assert_eq!(extract_at_pick("分析 @e2e4"), Some("e2e4".to_string()));
+        assert_eq!(extract_at_pick("分析 @e2e4", &legal), Some("e2e4".to_string()));
         // 多个 @UCI，取最后一个
         assert_eq!(
-            extract_at_pick("@e2e4 不好，@d2d4 更强"),
+            extract_at_pick("@e2e4 不好，@d2d4 更强", &legal),
             Some("d2d4".to_string())
         );
         // 5 字符升变
-        assert_eq!(extract_at_pick("@e7e8q"), Some("e7e8q".to_string()));
+        assert_eq!(extract_at_pick("@e7e8q", &legal), Some("e7e8q".to_string()));
         // 无 @
-        assert_eq!(extract_at_pick("纯文本思考"), None);
+        assert_eq!(extract_at_pick("纯文本思考", &legal), None);
         // 大小写兼容
-        assert_eq!(extract_at_pick("@E2E4"), Some("e2e4".to_string()));
+        assert_eq!(extract_at_pick("@E2E4", &legal), Some("e2e4".to_string()));
         // @ 后非 UCI 不匹配
-        assert_eq!(extract_at_pick("@center @king"), None);
+        assert_eq!(extract_at_pick("@center @king", &legal), None);
         // 边界：@e2e4 后跟字母不匹配（避免 @e2e4abc 误匹配）
-        assert_eq!(extract_at_pick("@e2e4abc"), None);
+        assert_eq!(extract_at_pick("@e2e4abc", &legal), None);
         // @e2e4 后跟空格匹配
-        assert_eq!(extract_at_pick("@e2e4 @g1f3"), Some("g1f3".to_string()));
+        assert_eq!(extract_at_pick("@e2e4 @g1f3", &legal), Some("g1f3".to_string()));
         // @e2e4 在字符串末尾匹配
-        assert_eq!(extract_at_pick("考虑 @e2e4"), Some("e2e4".to_string()));
+        assert_eq!(extract_at_pick("考虑 @e2e4", &legal), Some("e2e4".to_string()));
+    }
+
+    #[test]
+    fn test_extract_at_pick_validates_legal() {
+        // 验证 extract_at_pick 不会把对方走法误识为己方举棋
+        // 修复背景：AI 思考中输出 %应对 候选UCI→对手应招 行分析对手应招，
+        // 对手走法（如 d7d5）若不校验会被误提取，导致前端举棋动画显示"操纵对方棋子"
+        let legal = vec![
+            "e2e4".to_string(),
+            "d2d4".to_string(),
+            "g1f3".to_string(),
+        ];
+
+        // @UCI 在合法列表中 → 正常提取
+        assert_eq!(
+            extract_at_pick("@e2e4 不好，@d2d4 更强", &legal),
+            Some("d2d4".to_string())
+        );
+
+        // @UCI 不在合法列表中（对手走法 d7d5）→ 跳过，返回 None
+        assert_eq!(extract_at_pick("@d7d5 因黑应招", &legal), None);
+
+        // 混合：@d7d5（对手走法，非法）+ @e2e4（己方合法）→ 返回 e2e4
+        assert_eq!(
+            extract_at_pick("@d7d5 黑应招 @e2e4 控中", &legal),
+            Some("e2e4".to_string())
+        );
+
+        // 全部 @UCI 都不在合法列表中 → 返回 None
+        assert_eq!(
+            extract_at_pick("@d7d5 黑应招 @e7e5 争中心", &legal),
+            None
+        );
+
+        // 空 legal_moves → 返回 None（防御性）
+        assert_eq!(extract_at_pick("@e2e4", &[]), None);
+
+        // 大小写：legal_moves 大写时也能匹配 @e2e4（已统一小写比较）
+        let legal_mixed = vec!["E2E4".to_string()];
+        assert_eq!(extract_at_pick("@e2e4", &legal_mixed), Some("e2e4".to_string()));
+
+        // 5 字符升变 + 合法性校验
+        let legal_promo = vec!["e7e8q".to_string(), "e7e8r".to_string()];
+        assert_eq!(
+            extract_at_pick("@e7e8q 升变后", &legal_promo),
+            Some("e7e8q".to_string())
+        );
+        // 升变走法不在合法列表中 → 返回 None
+        assert_eq!(extract_at_pick("@a7a8q 不合法的升变", &legal_promo), None);
     }
 
     #[test]

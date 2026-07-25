@@ -43,6 +43,16 @@ fn default_sc_samples() -> u32 {
     1
 }
 
+/// white_player 缺省值（旧存档无此字段时回退 "human"）
+fn default_white_player() -> String {
+    "human".to_string()
+}
+
+/// black_player 缺省值（旧存档无此字段时回退 "deepseek"）
+fn default_black_player() -> String {
+    "deepseek".to_string()
+}
+
 /// 持久化存档结构（对局 + 设置）
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SaveData {
@@ -55,6 +65,12 @@ pub struct SaveData {
     /// 上次 AI 注意事项（跨回合记忆），旧存档无此字段回退空
     #[serde(default)]
     pub last_notes: String,
+    /// 白方主体类型："human" | "stockfish" | "deepseek"，旧存档无此字段回退 "human"
+    #[serde(default = "default_white_player")]
+    pub white_player: String,
+    /// 黑方主体类型："human" | "stockfish" | "deepseek"，旧存档无此字段回退 "deepseek"
+    #[serde(default = "default_black_player")]
+    pub black_player: String,
 }
 
 /// 获取存档文件路径（app_data_dir 下）
@@ -91,7 +107,30 @@ pub fn load(app: &AppHandle) -> Option<SaveData> {
         }
     };
     match serde_json::from_str::<SaveData>(&content) {
-        Ok(data) => Some(data),
+        Ok(mut data) => {
+            // 旧存档迁移：若 white_player/black_player 为空串（手动写入或异常），
+            // 按 player_side 推断默认主体组合（人 vs DeepSeek）
+            if data.white_player.is_empty() || data.black_player.is_empty() {
+                if data.player_side == "black" {
+                    // 玩家执黑：白方DeepSeek vs 黑方人
+                    if data.white_player.is_empty() {
+                        data.white_player = "deepseek".to_string();
+                    }
+                    if data.black_player.is_empty() {
+                        data.black_player = "human".to_string();
+                    }
+                } else {
+                    // 玩家执白（默认）：白方人 vs 黑方DeepSeek
+                    if data.white_player.is_empty() {
+                        data.white_player = "human".to_string();
+                    }
+                    if data.black_player.is_empty() {
+                        data.black_player = "deepseek".to_string();
+                    }
+                }
+            }
+            Some(data)
+        }
         Err(e) => {
             log::warn!("解析存档失败，将使用默认状态: {}", e);
             None

@@ -65,7 +65,26 @@ pub async fn start_game(
     args: StartGameArgs,
 ) -> Result<GameStateDto, String> {
     let side = str_to_color(&args.side).ok_or("无效的执方")?;
-    let game = ChessGame::new(side);
+    // 主体类型空串兜底：白方默认人，黑方默认DeepSeek
+    let white_player = if args.white_player.is_empty() {
+        "human".to_string()
+    } else {
+        args.white_player.clone()
+    };
+    let black_player = if args.black_player.is_empty() {
+        "deepseek".to_string()
+    } else {
+        args.black_player.clone()
+    };
+    // 推导 player_side（Human视角执方）：恰好一方是Human时该方为player_side，否则用传入 side 兜底
+    let player_side = if white_player == "human" && black_player != "human" {
+        str_to_color("white").unwrap()
+    } else if black_player == "human" && white_player != "human" {
+        str_to_color("black").unwrap()
+    } else {
+        side
+    };
+    let game = ChessGame::new(player_side, white_player, black_player);
     // 语言空值兜底为 "zh"
     let language = if args.thinking_language.is_empty() {
         "zh".to_string()
@@ -480,9 +499,29 @@ pub async fn reset_game(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
     side: String,
+    white_player: String,
+    black_player: String,
 ) -> Result<GameStateDto, String> {
-    let player_side = str_to_color(&side).ok_or("无效的执方")?;
-    let game = ChessGame::new(player_side);
+    // 主体类型空串兜底：白方默认人，黑方默认DeepSeek
+    let white_player = if white_player.is_empty() {
+        "human".to_string()
+    } else {
+        white_player
+    };
+    let black_player = if black_player.is_empty() {
+        "deepseek".to_string()
+    } else {
+        black_player
+    };
+    // 推导 player_side（Human视角执方）：恰好一方是Human时该方为player_side，否则用传入 side 兜底
+    let player_side = if white_player == "human" && black_player != "human" {
+        str_to_color("white").unwrap()
+    } else if black_player == "human" && white_player != "human" {
+        str_to_color("black").unwrap()
+    } else {
+        str_to_color(&side).unwrap_or_else(|| str_to_color("white").unwrap())
+    };
+    let game = ChessGame::new(player_side, white_player, black_player);
     let mut game_lock = state.game.lock().unwrap();
     *game_lock = Some(game);
     // 重开清空注意事项（跨回合记忆）
@@ -559,6 +598,8 @@ fn build_save_data(state: &AppState, status: &str) -> SaveData {
             status: status.to_string(),
             settings: settings_save,
             last_notes,
+            white_player: game.white_player.clone(),
+            black_player: game.black_player.clone(),
         },
         None => SaveData {
             has_game: false,
@@ -568,6 +609,8 @@ fn build_save_data(state: &AppState, status: &str) -> SaveData {
             status: String::new(),
             settings: settings_save,
             last_notes,
+            white_player: "human".to_string(),
+            black_player: "deepseek".to_string(),
         },
     }
 }

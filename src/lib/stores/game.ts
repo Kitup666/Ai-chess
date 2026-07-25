@@ -13,6 +13,8 @@ const initialState: GameStateDto = {
   legal_moves: [],
   in_check: false,
   ply: 0,
+  white_player: "human",
+  black_player: "deepseek",
 };
 
 export const gameState = writable<GameStateDto>(initialState);
@@ -55,10 +57,13 @@ export const isPlaying = derived(gameState, ($g) =>
   $g.status === "playing" || $g.status === "thinking"
 );
 
-/// 是否轮到玩家
-export const isPlayerTurn = derived(gameState, ($g) =>
-  $g.turn === $g.player_side && ($g.status === "playing")
-);
+/// 当前轮到方主体是否为 Human（用于决定是否允许手动点击走棋）
+/// 三方主体架构下：白方 turn 看 white_player，黑方 turn 看 black_player
+export const isPlayerTurn = derived(gameState, ($g) => {
+  if ($g.status !== "playing") return false;
+  const currentPlayer = $g.turn === "white" ? $g.white_player : $g.black_player;
+  return currentPlayer === "human";
+});
 
 /// 更新游戏状态
 export function updateGameState(state: GameStateDto) {

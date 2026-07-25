@@ -9,6 +9,10 @@ const CHESS_RULES_BRIEF_ZH: &str = r#"
 - 王车易位：王走两格(e1g1/e1c1)，车跳王旁。
 - 只能从合法走法列表中选，禁止自创。
 
+输入：
+- <board>ASCII棋盘：大写=白，小写=黑，.=空。直观看局面。
+- <hanging>对方悬空子(可白吃，对方无法回吃)。如有须优先吃掉。
+
 子力：兵1 马3 象3 车5 后9 王∞ 双象+0.5
 送子禁：目标被攻击且无保护=禁。兑子须能回吃或有利交换(如车换后)。
 "#;
@@ -20,6 +24,10 @@ Rules:
 - UCI: start+target, e.g. e2e4; promotion +q/r/b/n, e.g. e7e8q.
 - Castling: king 2 squares (e1g1/e1c1), rook jumps beside.
 - Pick only from legal moves list; never invent.
+
+Input:
+- <board>ASCII board: upper=white, lower=black, .=empty. Visualize position.
+- <hanging>enemy hanging pieces (free captures, enemy cannot recapture). MUST prioritize capturing them.
 
 Material: P1 N3 B3 R5 Q9 K∞ bishop pair +0.5
 No blunder: target attacked & undefended=forbidden. Trades need recapture or favorable exchange (e.g. R for Q).
@@ -493,12 +501,27 @@ fn user_message(game: &ChessGame, ai_side: &str, last_notes: &str, excluded: &[S
         format!("<hist>{}</hist>", history_str)
     };
 
+    // ASCII 棋盘可视化（基于 ChessArena 论文发现：LLM 棋盘重建能力弱，
+    // FEN 解析负担重，提供 ASCII 棋盘帮助模型直观理解局面）
+    let board_str = game.to_visual_string();
+
+    // 对方悬空子预计算（基于 ChessArena 论文发现：LLM 战术推理弱，常错过对方送子。
+    // 预计算可白吃的悬空子，减轻模型战术计算负担）
+    let hanging = game.enemy_hanging();
+    let hanging_xml = if hanging.is_empty() {
+        "<hanging/>".to_string()
+    } else {
+        format!("<hanging>{}</hanging>", hanging.join(" "))
+    };
+
     let content = format!(
-        "选最佳走法。\n<state>side:{ai_side} turn:{turn} fen:{fen}</state>\n<hist_block>{hist_xml}</hist_block>\n<legal>{legal_str}</legal>\n{notes_xml}\n回复 <move>UCI</move>",
+        "选最佳走法。\n<state>side:{ai_side} turn:{turn} fen:{fen}</state>\n<board>\n{board_str}\n</board>\n<hist_block>{hist_xml}</hist_block>\n<legal>{legal_str}</legal>\n{hanging_xml}\n{notes_xml}\n回复 <move>UCI</move>",
         ai_side = ai_side,
         fen = fen,
         turn = turn,
+        board_str = board_str,
         hist_xml = hist_xml,
+        hanging_xml = hanging_xml,
         notes_xml = notes_xml,
         legal_str = legal.join(" ")
     );
